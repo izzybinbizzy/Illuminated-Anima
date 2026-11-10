@@ -463,6 +463,9 @@ namespace Plugin
 				if (const auto keys = MakeKeys(Anima::DeathKeys(now, end, a_s.deathFade))) {
 					Play(one, keys, a_s.deathFade ? Anima::kDeathFadeSeconds : 0.05f, false);
 				} else if (one.light) {
+					if (one.dimmer) {
+						one.dimmer->Stop();  // its flicker would write over the end
+					}
 					one.light->GetLightRuntimeData().fade = end;  // no keys to play (an old VR Address Library): straight to its end
 				}
 				one.loop.reset();
