@@ -23,7 +23,7 @@ or newer (the first with the game's dimmer); with an older one the lights hold s
 
 ## Settings
 
-SKSE Menu Framework > Illuminated - Creature Lighting NG, saved to `Data\SKSE\Plugins\IlluminatedAnima\Settings.ini`.
+SKSE Menu Framework > Illuminated - Creature Lighting NG, saved to `Data\SKSE\Plugins\IlluminatedCreatureLightingNG\Settings.ini`.
 
 ## Building
 

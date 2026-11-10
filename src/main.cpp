@@ -1,4 +1,4 @@
-// Illuminated Anima - SKSE plugin
+// Illuminated - Creature Lighting NG - SKSE plugin
 // Copyright (C) 2026 izzydoingit
 //
 // This program is free software: you can redistribute it and/or modify it under the terms of the
@@ -52,7 +52,7 @@ namespace
 		ReadSpellRecords();
 		ApplySpellRecords(SettingsNow());
 		InstallLights();  // before the menu's steps: a throw in them leaves the creatures lit
-		SKSE::log::info("{}", Translation::Load("Data/SKSE/Plugins/IlluminatedAnima/Translation.json"));
+		SKSE::log::info("{}", Translation::Load("Data/SKSE/Plugins/IlluminatedCreatureLightingNG/Translation.json"));
 		RegisterMenu();
 		SKSE::log::info("ready in {:.1f} ms", std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - started).count());
 	}

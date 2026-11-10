@@ -1,8 +1,8 @@
-// Illuminated Anima - SKSE plugin
+// Illuminated - Creature Lighting NG - SKSE plugin
 // Copyright (C) 2026 izzydoingit
 // GPL-3.0-or-later; see LICENSE.txt and the notice at the top of main.cpp.
 //
-// The creatures files (Data\SKSE\Plugins\IlluminatedAnima\Creatures\*.txt, read in name order; every row that names a creature
+// The creatures files (Data\SKSE\Plugins\IlluminatedCreatureLightingNG\Creatures\*.txt, read in name order; every row that names a creature
 // lights it), the races and body models they name, and what the other creature lighting mods light: their Light Placer files and
 // their abilities that carry a light - all read once at data load. A creature is found by its race first, then by a model its body
 // wears (the skin's armor addons), so a body replacer that keeps the race keeps the light. An ability can reach a creature no record
@@ -14,7 +14,7 @@ namespace Plugin
 {
 	namespace
 	{
-		constexpr const char* kFolder = "Data/SKSE/Plugins/IlluminatedAnima/Creatures";
+		constexpr const char* kFolder = "Data/SKSE/Plugins/IlluminatedCreatureLightingNG/Creatures";
 
 		std::vector<Anima::Row>                                                 gRows;
 		std::unordered_map<RE::TESRace*, std::vector<std::size_t>>              gByRace;

@@ -1,4 +1,4 @@
-// Illuminated Anima - SKSE plugin
+// Illuminated - Creature Lighting NG - SKSE plugin
 // Copyright (C) 2026 izzydoingit
 // GPL-3.0-or-later; see LICENSE.txt and the notice at the top of main.cpp.
 //
@@ -24,7 +24,7 @@ namespace Plugin
 {
 	namespace
 	{
-		constexpr const char* kName = "IlluminatedAnimaLight";
+		constexpr const char* kName = "IlluminatedCreatureLightingNGLight";
 		constexpr std::size_t kCapShaders = 16;  // lit creatures on Community Shaders (Light Limit Fix), as RELight's glow cap
 		constexpr std::size_t kCapPlain = 5;     // and on ENB / Vanilla, where a few lights already fill a room's budget
 		constexpr std::size_t kCostSlot = 0;

@@ -1,4 +1,4 @@
-// Illuminated Anima - tests for src/AnimaMath.h and the shared Floor Light Fix's src/FloorLightMath.h (no game needed).
+// Illuminated - Creature Lighting NG - tests for src/AnimaMath.h and the shared Floor Light Fix's src/FloorLightMath.h (no game needed).
 // Copyright (C) 2026 izzydoingit. GPL-3.0-or-later.
 //
 // PC Runner\plugin build.py builds and runs them (xmake target testanima), then again under clang's address and
@@ -245,6 +245,7 @@ namespace
 		CHECK(Anima::OtherModOf("soul gems", "emissive soul gems") == std::optional<std::size_t>(Anima::kOtherUnnamed));
 		CHECK(!Anima::OtherModOf("illuminated", "explosions"));
 		CHECK(!Anima::OtherModOf("illuminatedanima", "x"));
+		CHECK(!Anima::OtherModOf("illuminatedcreaturelightingng", "x"));
 		CHECK(Anima::OtherModOf("magic creatures of radiance", "atronachflame") == std::optional<std::size_t>(Anima::kOtherUnnamed));
 	}
 
