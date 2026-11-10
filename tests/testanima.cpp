@@ -1,4 +1,4 @@
-// Illuminated Anima - tests for src/AnimaMath.h (no game needed).
+// Illuminated Anima - tests for src/AnimaMath.h and the shared Floor Light Fix's src/FloorLightMath.h (no game needed).
 // Copyright (C) 2026 izzydoingit. GPL-3.0-or-later.
 //
 // PC Runner\plugin build.py builds and runs them (xmake target testanima), then again under clang's address and
@@ -6,6 +6,7 @@
 // part way proves nothing).
 
 #include "AnimaMath.h"
+#include "FloorLightChecks.h"
 
 #include <cmath>
 #include <cstdio>
@@ -30,7 +31,7 @@ namespace
 #define CHECK(x) Check((x), #x, __LINE__)
 
 	// the fewest checks a whole run makes (raise it when checks are added; lower it only when checks are removed on purpose)
-	constexpr int kFloor = 188;
+	constexpr int kFloor = 188 + FloorLightChecks::kCount;
 
 	[[nodiscard]] bool Near(float a, float b, float a_eps = 0.001f) { return std::fabs(a - b) <= a_eps; }
 
@@ -424,6 +425,7 @@ int main()
 	TheCap();
 	OverTime();
 	Keys();
+	FloorLightChecks::Run(Check);
 	std::printf("%d passed, %d failed\n", gPassed, gFailed);
 	if (gPassed + gFailed < kFloor) {
 		std::printf("FAIL: only %d checks ran, fewer than the floor %d\n", gPassed + gFailed, kFloor);

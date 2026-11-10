@@ -31,8 +31,11 @@
 //   Menu.cpp            the SKSE Menu Framework page        DevBench.cpp  DevBench's inspect and control (optional)
 //   LightKit.h, LightMath.h, Pulse.h, MenuStyle.h, Translation.h, RuntimeGuard.h, DevBenchGlue.h, SKSEMenuFramework.h,
 //                       DevBenchAPI.*: shared word for word with our other plugins (master: Tools\Shared Plugin Code)
-//   tests\testanima.cpp the off-game tests of AnimaMath.h
+//   FloorLightFix.*, FloorLightMath.h, FloorLightChecks.h
+//                       the Floor Light Fix, shared the same way: a light the game takes out of the scene stops lighting the floor
+//   tests\testanima.cpp the off-game tests of AnimaMath.h and FloorLightMath.h
 
+#include "FloorLightFix.h"
 #include "Plugin.h"
 #include "RuntimeGuard.h"
 #include "Translation.h"
@@ -97,11 +100,17 @@ namespace
 
 SKSEPluginLoad(const SKSE::LoadInterface* a_skse)
 {
-	SKSE::Init(a_skse);
+	// the trampoline holds the Floor Light Fix's two call hooks, the only ones of this plugin that need it
+	SKSE::InitInfo info{};
+	info.trampoline = true;
+	info.trampolineSize = FloorLightFix::kTrampolineBytes;
+	SKSE::Init(a_skse, info);
 	// the wrong game: loaded but idle - a false here makes SKSE add its own "exit game?" box over the guard's
 	if (!RuntimeGuard::RightGame("Illuminated Anima", "Illuminated Anima", "Illuminated Anima - VR")) {
 		return true;
 	}
+	// installed only by the first of our mods that carries it; every later copy finds its sites taken and stands down
+	FloorLightFix::Install();
 	// the start line is the only work here that can throw (low memory): it never leaves the plugin
 	try {
 		const auto* decl = SKSE::PluginDeclaration::GetSingleton();
