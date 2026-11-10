@@ -1,4 +1,4 @@
-// Illuminated Anima - SKSE plugin
+// Illuminated - Creature Lighting NG - SKSE plugin
 // Copyright (C) 2026 izzydoingit
 // GPL-3.0-or-later; see LICENSE.txt and the notice at the top of main.cpp.
 //
@@ -389,7 +389,7 @@ namespace Anima
 	// folders are none; a file of a mod not named here is kOtherUnnamed.
 	[[nodiscard]] inline std::optional<std::size_t> OtherModOf(std::string_view a_folder, std::string_view a_stem)
 	{
-		if (a_folder == "illuminated" || a_folder == "illuminatedanima") {
+		if (a_folder == "illuminated" || a_folder == "illuminatedanima" || a_folder == "illuminatedcreaturelightingng") {
 			return std::nullopt;
 		}
 		for (const auto& f : kOtherFiles) {

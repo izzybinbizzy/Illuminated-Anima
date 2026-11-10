@@ -1,4 +1,4 @@
-// Illuminated Anima - SKSE plugin
+// Illuminated - Creature Lighting NG - SKSE plugin
 // Copyright (C) 2026 izzydoingit
 // GPL-3.0-or-later; see LICENSE.txt and the notice at the top of main.cpp.
 //
@@ -41,7 +41,7 @@ namespace Plugin
 	[[nodiscard]] bool        InverseSquare();
 	[[nodiscard]] bool        LightLimitFix();
 
-	// ------------------------------------------------------------------ Settings.cpp: IlluminatedAnima\Settings.ini, written by the menu
+	// ------------------------------------------------------------------ Settings.cpp: IlluminatedCreatureLightingNG\Settings.ini, written by the menu
 	void                          LoadSettings();
 	bool                          SaveSettings();  // any thread; false when the file could not be written (logged)
 	[[nodiscard]] Anima::Settings SettingsNow();

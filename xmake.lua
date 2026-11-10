@@ -1,6 +1,6 @@
--- Illuminated Anima - SKSE plugin. GPL-3.0-or-later, see LICENSE.txt.
+-- Illuminated - Creature Lighting NG - SKSE plugin. GPL-3.0-or-later, see LICENSE.txt.
 set_xmakever("3.0.0")
-set_project("IlluminatedAnima")
+set_project("IlluminatedCreatureLightingNG")
 set_version("1.0.0")
 set_license("GPL-3.0-or-later")
 set_arch("x64")
@@ -25,12 +25,12 @@ includes("lib/commonlibsse-ng")
 
 -- the other creature lighting mods' Light Placer configs are JSON (MIT-licensed library; the version CommonLib pins for its own option)
 add_requires("nlohmann_json v3.12.0")
-target("IlluminatedAnima", function()
+target("IlluminatedCreatureLightingNG", function()
     add_deps("commonlibsse-ng")
     add_packages("nlohmann_json")
     add_defines("NOMINMAX")  -- windows.h min/max macros break std::min/max and numeric_limits::max
     add_rules("commonlibsse-ng.plugin", {
-        name = "IlluminatedAnima",
+        name = "IlluminatedCreatureLightingNG",
         author = "izzydoingit",
         description = "Illuminated - Creature Lighting NG - creatures glow in their own light, on Community Shaders, ENB and Vanilla",
     })

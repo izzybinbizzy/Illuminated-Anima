@@ -1,8 +1,8 @@
-// Illuminated Anima - SKSE plugin
+// Illuminated - Creature Lighting NG - SKSE plugin
 // Copyright (C) 2026 izzydoingit
 // GPL-3.0-or-later; see LICENSE.txt and the notice at the top of main.cpp.
 //
-// IlluminatedAnima\Settings.ini, written by the menu (settings live in the SKSE menu only): the live table (AnimaMath.h's
+// IlluminatedCreatureLightingNG\Settings.ini, written by the menu (settings live in the SKSE menu only): the live table (AnimaMath.h's
 // Settings, read and written by the game-free reader and writer the off-game tests run) under one lock.
 
 #include "Plugin.h"
@@ -11,7 +11,7 @@ namespace Plugin
 {
 	namespace
 	{
-		constexpr const char* kPath = "Data/SKSE/Plugins/IlluminatedAnima/Settings.ini";
+		constexpr const char* kPath = "Data/SKSE/Plugins/IlluminatedCreatureLightingNG/Settings.ini";
 
 		std::mutex      gLock;
 		Anima::Settings gS;  // under gLock

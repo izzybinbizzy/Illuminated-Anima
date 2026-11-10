@@ -1,4 +1,4 @@
-// Illuminated Anima - SKSE plugin
+// Illuminated - Creature Lighting NG - SKSE plugin
 // Copyright (C) 2026 izzydoingit
 // GPL-3.0-or-later; see LICENSE.txt and the notice at the top of main.cpp.
 //
@@ -38,7 +38,7 @@ namespace Plugin
 		std::vector<Target> gTargets;
 
 		constexpr const char*       kReLightConfigs = "Data/SKSE/Plugins/ReLight/Configs";
-		constexpr std::wstring_view kOurFolder = L"illuminated anima";  // ours, under kReLightConfigs (lower case)
+		constexpr std::wstring_view kOurFolder = L"illuminated creature lighting ng";  // ours, under kReLightConfigs (lower case)
 
 		// written at data load before any hook goes in; read from loader threads
 		std::unordered_map<RE::FormID, std::size_t> gInFiles;  // a base record -> its place in gTargets
