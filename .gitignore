@@ -1,0 +1,6 @@
+# build output and the CommonLib checkout build.bat makes
+build/
+.xmake/
+lib/
+dist/
+*.log

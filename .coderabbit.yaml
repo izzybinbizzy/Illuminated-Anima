@@ -1,0 +1,27 @@
+# CodeRabbit settings for this repository (https://docs.coderabbit.ai/reference/configuration)
+language: en-US
+reviews:
+  profile: assertive
+  high_level_summary: true
+  poem: false
+  request_changes_workflow: false
+  review_status: true
+  auto_review:
+    enabled: true
+    auto_pause_after_reviewed_commits: 0
+    drafts: false
+    base_branches:
+      - main
+  path_instructions:
+    - path: "src/**"
+      instructions: >-
+        SKSE plugin for Skyrim SE / AE (and a VR build) on CommonLibSSE-NG that gives creatures lights of their own. It
+        hooks Character's Load3D and Set3D slots and sinks the game's events; lights are made in memory and hung on the
+        creature's bones. Check that nothing runs on a timer or every frame, that every pointer from the game is
+        null-checked, that a hook cannot throw, and that another mod's light is never changed.
+    - path: "tests/**"
+      instructions: >-
+        Off-game tests of the game-free code in src/AnimaMath.h. Check that every case is meaningful and that the run
+        fails when fewer checks ran than its floor.
+chat:
+  auto_reply: true
