@@ -238,7 +238,7 @@ namespace Plugin
 	{
 		std::array<std::vector<std::string>, Anima::kOthers> gReplaced;  // per other mod: the names of our creatures its config lights
 
-		// which of our creatures each other mod's config lights instead of us: a row's own body models, and the models the skin of
+		// which of our creatures each other mod's config lights instead of us: a row's own body models, and the models every skin of
 		// each race a row names wears (for the menu's warning)
 		void FindReplaced()
 		{
@@ -252,10 +252,13 @@ namespace Plugin
 			}
 			for (const auto& [skin, rows] : gBySkin) {
 				const auto wearers = gSkinRaces.find(skin);
+				const auto worn = [&](const RE::TESObjectARMA* a_addon) {
+					return wearers == gSkinRaces.end() || std::ranges::any_of(wearers->second, [&](RE::TESRace* a_race) { return Wears(a_addon, a_race); });
+				};
+				// no wearer known to take any of its addons (a race read off a template): every addon counts
+				const bool known = std::ranges::any_of(skin->armorAddons, worn);
 				for (auto* addon : skin->armorAddons) {
-					// put on a race that wears this skin (every addon when nothing is known to wear it)
-					const auto worn = wearers == gSkinRaces.end() || std::ranges::any_of(wearers->second, [&](RE::TESRace* a_race) { return Wears(addon, a_race); });
-					if (!addon || !worn) {
+					if (!addon || (known && !worn(addon))) {
 						continue;
 					}
 					for (auto& model : addon->bipedModels) {
@@ -267,18 +270,22 @@ namespace Plugin
 					}
 				}
 			}
-			for (const auto& [race, rows] : gByRace) {
-				if (!race || !race->skin) {
-					continue;
-				}
-				for (auto* addon : race->skin->armorAddons) {
-					if (!Wears(addon, race)) {
+			// every skin a race of ours wears - its own and its NPCs' - and of each the addons the game puts on that race
+			for (const auto& [skin, races] : gSkinRaces) {
+				for (auto* race : races) {
+					const auto rows = gByRace.find(race);
+					if (rows == gByRace.end()) {
 						continue;
 					}
-					for (auto& model : addon->bipedModels) {
-						if (const char* path = model.GetModel(); path && *path) {
-							for (const auto i : rows) {
-								models[i].push_back(Anima::NormalPath(path));
+					for (auto* addon : skin->armorAddons) {
+						if (!Wears(addon, race)) {
+							continue;
+						}
+						for (auto& model : addon->bipedModels) {
+							if (const char* path = model.GetModel(); path && *path) {
+								for (const auto i : rows->second) {
+									models[i].push_back(Anima::NormalPath(path));
+								}
 							}
 						}
 					}
@@ -510,6 +517,7 @@ namespace Plugin
 		IndexRows();
 		ReadClaims();
 		FindReplaced();
+		gSkinRaces.clear();
 		FindAbilityLights();
 		FindRowGlobals();
 		for (std::size_t m = 0; m < Anima::kOthers; ++m) {
