@@ -16,17 +16,24 @@ namespace Plugin
 	{
 		constexpr const char* kFolder = "Data/SKSE/Plugins/IlluminatedAnima/Creatures";
 
-		std::vector<Anima::Row>                                                gRows;
-		std::unordered_map<const RE::TESRace*, std::vector<std::size_t>>       gByRace;
-		std::unordered_map<std::string, std::vector<std::size_t>>              gByModel;      // NormalPath -> rows
-		std::unordered_set<const RE::TESObjectARMO*>                           gRowSkins;     // every skin a character wears that holds a model of gByModel, or a row names
-		std::unordered_map<const RE::TESObjectARMO*, std::vector<std::size_t>> gBySkin;       // a skin record a row names (skin=) -> rows
-		std::unordered_map<std::string, Anima::Lighters>                       gClaims;       // a body model other mods' Light Placer files light -> every one of those mods
-		std::unordered_map<std::string, std::string>                           gClaimFolder;  // the same model -> the Light Placer folder of a mod we do not name
-		Anima::Lighters                                                        gFound{};
-		std::size_t                                                            gFiles{ 0 };
+		std::vector<Anima::Row>                                                 gRows;
+		std::unordered_map<RE::TESRace*, std::vector<std::size_t>>              gByRace;
+		std::unordered_map<std::string, std::vector<std::size_t>>               gByModel;      // NormalPath -> rows
+		std::unordered_set<const RE::TESObjectARMO*>                            gRowSkins;     // every skin a character wears that holds a model of gByModel, or a row names
+		std::unordered_map<const RE::TESObjectARMO*, std::vector<std::size_t>>  gBySkin;       // a skin record a row names (skin=) -> rows
+		std::unordered_map<const RE::TESObjectARMO*, std::vector<RE::TESRace*>> gSkinRaces;    // every skin -> the races that wear it
+		std::unordered_map<std::string, Anima::Lighters>                        gClaims;       // a body model other mods' Light Placer files light -> every one of those mods
+		std::unordered_map<std::string, std::string>                            gClaimFolder;  // the same model -> the Light Placer folder of a mod we do not name
+		Anima::Lighters                                                         gFound{};
+		std::size_t                                                             gFiles{ 0 };
 		// gFound and the warning's lists: written on the main thread (a creature met in play adds to them), read by the menu's render thread
 		std::mutex gOthersLock;
+
+		// an addon the game puts on a race: a skin may also list another race's addon (vanilla dwarven skins carry the draugr body's)
+		[[nodiscard]] bool Wears(const RE::TESObjectARMA* a_addon, RE::TESRace* a_race)
+		{
+			return a_addon && (!a_race || a_addon->IsValidRace(a_race));
+		}
 
 		// a path as UTF-8 for the log and the names (path::string() throws on a name the local code page cannot hold)
 		[[nodiscard]] std::string Utf8(const std::filesystem::path& a_path)
@@ -91,11 +98,16 @@ namespace Plugin
 				races += gByRace.contains(race) ? 1 : 0;
 			}
 			// the skins that wear a row's model, read once: asking whether a character could be ours then needs no list of its models
-			std::unordered_set<RE::TESObjectARMO*> seen;
-			const auto                             readSkin = [&](RE::TESObjectARMO* a_skin) {
-				if (!a_skin || !seen.insert(a_skin).second) {
+			const auto readSkin = [&](RE::TESObjectARMO* a_skin, RE::TESRace* a_race) {
+				if (!a_skin) {
 					return;
 				}
+				auto& races = gSkinRaces[a_skin];
+				if (std::ranges::find(races, a_race) != races.end()) {
+					return;
+				}
+				races.push_back(a_race);
+				// wide on purpose: a creature whose race changes at run time still passes, and BodyModels takes its race's addons
 				for (auto* addon : a_skin->armorAddons) {
 					if (!addon) {
 						continue;
@@ -107,13 +119,12 @@ namespace Plugin
 					}
 				}
 			};
-			if (!gByModel.empty()) {
-				for (auto* race : LightKit::FormsOf<RE::TESRace>()) {
-					readSkin(race ? race->skin : nullptr);
-				}
-				for (auto* npc : LightKit::FormsOf<RE::TESNPC>()) {
-					readSkin(npc ? npc->skin : nullptr);
-				}
+			// read even with no model named: the warning's skin= rows need each skin's wearers
+			for (auto* race : LightKit::FormsOf<RE::TESRace>()) {
+				readSkin(race ? race->skin : nullptr, race);
+			}
+			for (auto* npc : LightKit::FormsOf<RE::TESNPC>()) {
+				readSkin(npc ? npc->skin : nullptr, npc ? npc->race : nullptr);
 			}
 			// a skin a row names by record: two looks of one body model (the elytra nymph's Mania and Dementia) told apart by what they wear
 			for (std::size_t i = 0; i < gRows.size(); ++i) {
@@ -208,7 +219,7 @@ namespace Plugin
 			}
 			const auto sex = npc ? npc->GetSex() : RE::SEX::kMale;
 			for (auto* addon : skin->armorAddons) {
-				if (!addon || (race && !addon->IsValidRace(race))) {
+				if (!Wears(addon, race)) {
 					continue;
 				}
 				const char* model = addon->bipedModels[sex == RE::SEX::kFemale ? 1 : 0].GetModel();
@@ -228,8 +239,8 @@ namespace Plugin
 	{
 		std::array<std::vector<std::string>, Anima::kOthers> gReplaced;  // per other mod: the names of our creatures its config lights
 
-		// which of our creatures each other mod's config lights instead of us: a row's own body models, and the models the skin of
-		// each race a row names wears (for the menu's warning)
+		// which of our creatures each other mod's config lights instead of us: a row's own body models, and the models of every skin its races
+		// wear - a race's own and its NPCs' (for the menu's warning)
 		void FindReplaced()
 		{
 			gReplaced = {};
@@ -241,7 +252,9 @@ namespace Plugin
 				models[i] = gRows[i].models;
 			}
 			for (const auto& [skin, rows] : gBySkin) {
-				for (auto* addon : skin->armorAddons) {
+				const auto wearers = gSkinRaces.find(skin);
+				const auto worn = Anima::AddonsWorn(skin->armorAddons, wearers != gSkinRaces.end() ? wearers->second : std::vector<RE::TESRace*>{}, Wears);
+				for (auto* addon : worn) {
 					if (!addon) {
 						continue;
 					}
@@ -254,18 +267,22 @@ namespace Plugin
 					}
 				}
 			}
-			for (const auto& [race, rows] : gByRace) {
-				if (!race || !race->skin) {
-					continue;
-				}
-				for (auto* addon : race->skin->armorAddons) {
-					if (!addon) {
+			// every skin a race of ours wears - its own and its NPCs' - and of each the addons the game puts on that race
+			for (const auto& [skin, races] : gSkinRaces) {
+				for (auto* race : races) {
+					const auto rows = gByRace.find(race);
+					if (rows == gByRace.end()) {
 						continue;
 					}
-					for (auto& model : addon->bipedModels) {
-						if (const char* path = model.GetModel(); path && *path) {
-							for (const auto i : rows) {
-								models[i].push_back(Anima::NormalPath(path));
+					for (auto* addon : skin->armorAddons) {
+						if (!Wears(addon, race)) {
+							continue;
+						}
+						for (auto& model : addon->bipedModels) {
+							if (const char* path = model.GetModel(); path && *path) {
+								for (const auto i : rows->second) {
+									models[i].push_back(Anima::NormalPath(path));
+								}
 							}
 						}
 					}
@@ -485,6 +502,7 @@ namespace Plugin
 		gByModel.clear();
 		gRowSkins.clear();
 		gBySkin.clear();
+		gSkinRaces.clear();
 		gClaims.clear();
 		gClaimFolder.clear();
 		gAbilityLights.clear();
@@ -496,6 +514,7 @@ namespace Plugin
 		IndexRows();
 		ReadClaims();
 		FindReplaced();
+		gSkinRaces.clear();
 		FindAbilityLights();
 		FindRowGlobals();
 		for (std::size_t m = 0; m < Anima::kOthers; ++m) {

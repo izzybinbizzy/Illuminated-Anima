@@ -18,6 +18,7 @@
 #include <istream>
 #include <optional>
 #include <ostream>
+#include <ranges>
 #include <string>
 #include <string_view>
 #include <vector>
@@ -440,6 +441,23 @@ namespace Anima
 	[[nodiscard]] constexpr int SnapPercent(int a_value, int a_min, int a_max) noexcept
 	{
 		return std::clamp((std::clamp(a_value, a_min, a_max) + 2) / 5 * 5, a_min, a_max);
+	}
+
+	// a skin's addons that count for the warning: those the game puts on a race that wears the skin; every one when no wearer is
+	// known, or when no known wearer takes any of them (a race read off a template)
+	template <class Addons, class Races, class Fits>
+	[[nodiscard]] auto AddonsWorn(const Addons& a_addons, const Races& a_races, Fits a_fits)
+	{
+		std::vector<std::ranges::range_value_t<Addons>> out;
+		for (const auto& addon : a_addons) {
+			if (std::ranges::empty(a_races) || std::ranges::any_of(a_races, [&](const auto& a_race) { return a_fits(addon, a_race); })) {
+				out.push_back(addon);
+			}
+		}
+		if (out.empty()) {
+			out.assign(std::ranges::begin(a_addons), std::ranges::end(a_addons));
+		}
+		return out;
 	}
 
 	struct Settings
