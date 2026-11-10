@@ -1,8 +1,8 @@
-# Illuminated Anima - SKSE plugin
+# Illuminated - Creature Lighting NG - SKSE plugin
 
 Copyright (C) 2026 izzydoingit. GPL-3.0-or-later, see `LICENSE`.
 
-The plugin of Illuminated Anima, an all-in-one lighting mod for creatures: no plugin file, no scripts, nothing written into the save.
+The plugin of Illuminated - Creature Lighting NG, an all-in-one lighting mod for creatures: no plugin file, no scripts, nothing written into the save.
 
 ## What it does
 
@@ -23,7 +23,7 @@ or newer (the first with the game's dimmer); with an older one the lights hold s
 
 ## Settings
 
-SKSE Menu Framework > Illuminated Anima, saved to `Data\SKSE\Plugins\IlluminatedAnima\Settings.ini`.
+SKSE Menu Framework > Illuminated - Creature Lighting NG, saved to `Data\SKSE\Plugins\IlluminatedAnima\Settings.ini`.
 
 ## Building
 

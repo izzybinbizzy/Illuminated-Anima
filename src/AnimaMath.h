@@ -523,7 +523,7 @@ namespace Anima
 
 	inline void WriteSettings(const Settings& a_s, std::ostream& a_out)
 	{
-		a_out << "; Illuminated Anima - written by its SKSE Menu Framework page. Change the settings there.\n[Settings]\n";
+		a_out << "; Illuminated - Creature Lighting NG - written by its SKSE Menu Framework page. Change the settings there.\n[Settings]\n";
 		a_out << "Lights=" << (a_s.on ? 1 : 0) << '\n';
 		for (std::size_t i = 0; i < kKinds; ++i) {
 			a_out << "Kind" << kKindNames[i] << '=' << (a_s.kinds[i] ? 1 : 0) << '\n';

@@ -32,7 +32,7 @@ target("IlluminatedAnima", function()
     add_rules("commonlibsse-ng.plugin", {
         name = "IlluminatedAnima",
         author = "izzydoingit",
-        description = "Illuminated Anima - creatures glow in their own light, on Community Shaders, ENB and Vanilla",
+        description = "Illuminated - Creature Lighting NG - creatures glow in their own light, on Community Shaders, ENB and Vanilla",
     })
     add_files("src/*.cpp")
     add_headerfiles("src/*.h")

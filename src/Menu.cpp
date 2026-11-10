@@ -108,7 +108,7 @@ namespace Plugin
 		void RenderSettings()
 		{
 			const MenuStyle::Page page;
-			Header(Icon::kBulb, T("Illuminated Anima"));
+			Header(Icon::kBulb, T("Illuminated - Creature Lighting NG"));
 			TextWrapped("%s", T("Creatures glow in their own light - atronachs, wisps, spriggans, ice wraiths, ash spawn, chaurus, familiars and "
 								"more - on Community Shaders, ENB and Vanilla."));
 			MenuStyle::Note(Translation::Fill(T("Lighting found: {}. Creatures lit near you now: {}."), LightingName(LightingFound()),
@@ -169,7 +169,7 @@ namespace Plugin
 						list += (n ? ", " : "") + names[n];
 					}
 					PushStyleColor(ImGuiCol_Text, MenuStyle::kBad);
-					TextWrapped("%s", Translation::Fill(T("Warning: {} is lighting these creatures instead of Illuminated Anima: {}."),
+					TextWrapped("%s", Translation::Fill(T("Warning: {} is lighting these creatures instead of Illuminated - Creature Lighting NG: {}."),
 										  Anima::kOtherMods[i].name, list)
 										  .c_str());
 					PopStyleColor();
@@ -201,7 +201,7 @@ namespace Plugin
 		{
 			SetNextWindowPos(ImVec2(40.0f, 20.0f), ImGuiCond_Always);
 			SetNextWindowSize(ImVec2(820.0f, 1040.0f), ImGuiCond_Always);
-			if (Begin("Illuminated Anima (test)", nullptr, ImGuiWindowFlags_NoCollapse) && gTestOpen.load()) {
+			if (Begin("Illuminated - Creature Lighting NG (test)", nullptr, ImGuiWindowFlags_NoCollapse) && gTestOpen.load()) {
 				LightKit::GuardedDraw<RenderSettings>();
 			}
 			End();
@@ -223,7 +223,7 @@ namespace Plugin
 			return;
 		}
 		MenuStyle::gTheme = MenuStyle::MakeTheme(0x6FE3B4);
-		SKSEMenuFramework::SetSection(T("Illuminated Anima"));
+		SKSEMenuFramework::SetSection(T("Illuminated - Creature Lighting NG"));
 		SKSEMenuFramework::AddSectionItem(T("Settings"), LightKit::GuardedDraw<RenderSettings>);
 		gTestWindow = SKSEMenuFramework::AddWindow(DrawTestWindow, false);
 		SKSE::log::info("settings page added to SKSE Menu Framework {}", SKSEMenuFramework::GetMenuFrameworkVersion());

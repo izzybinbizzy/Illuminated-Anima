@@ -106,7 +106,7 @@ SKSEPluginLoad(const SKSE::LoadInterface* a_skse)
 	info.trampolineSize = FloorLightFix::kTrampolineBytes;
 	SKSE::Init(a_skse, info);
 	// the wrong game: loaded but idle - a false here makes SKSE add its own "exit game?" box over the guard's
-	if (!RuntimeGuard::RightGame("Illuminated Anima", "Illuminated Anima", "Illuminated Anima - VR")) {
+	if (!RuntimeGuard::RightGame("Illuminated - Creature Lighting NG", "Illuminated - Creature Lighting NG", "Illuminated - Creature Lighting NG - VR")) {
 		return true;
 	}
 	// installed only by the first of our mods that carries it; every later copy finds its sites taken and stands down
@@ -115,7 +115,7 @@ SKSEPluginLoad(const SKSE::LoadInterface* a_skse)
 	try {
 		const auto* decl = SKSE::PluginDeclaration::GetSingleton();
 		const auto  ver = decl ? std::format("{}.{}", decl->GetVersion().major(), decl->GetVersion().minor()) : std::string("?");
-		SKSE::log::info("Illuminated Anima {} - creatures glow in their own light, on any lighting", ver);
+		SKSE::log::info("Illuminated - Creature Lighting NG {} - creatures glow in their own light, on any lighting", ver);
 	} catch (...) {
 	}
 	SKSE::GetMessagingInterface()->RegisterListener(OnMessage);
