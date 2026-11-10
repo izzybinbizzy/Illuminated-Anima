@@ -17,7 +17,7 @@ namespace Plugin
 		constexpr const char* kFolder = "Data/SKSE/Plugins/IlluminatedAnima/Creatures";
 
 		std::vector<Anima::Row>                                                gRows;
-		std::unordered_map<const RE::TESRace*, std::vector<std::size_t>>       gByRace;
+		std::unordered_map<RE::TESRace*, std::vector<std::size_t>>             gByRace;
 		std::unordered_map<std::string, std::vector<std::size_t>>              gByModel;      // NormalPath -> rows
 		std::unordered_set<const RE::TESObjectARMO*>                           gRowSkins;     // every skin a character wears that holds a model of gByModel, or a row names
 		std::unordered_map<const RE::TESObjectARMO*, std::vector<std::size_t>> gBySkin;       // a skin record a row names (skin=) -> rows
@@ -258,8 +258,9 @@ namespace Plugin
 				if (!race || !race->skin) {
 					continue;
 				}
+				// only the addons the game puts on this race: vanilla dwarven skins also list the draugr body's addon
 				for (auto* addon : race->skin->armorAddons) {
-					if (!addon) {
+					if (!addon || !addon->IsValidRace(race)) {
 						continue;
 					}
 					for (auto& model : addon->bipedModels) {
