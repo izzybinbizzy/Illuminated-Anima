@@ -139,8 +139,13 @@ namespace Plugin
 			}
 			const int v = static_cast<int>(std::clamp(*value, -100000.0, 100000.0));
 			if (key == "menuPage") {
-				ShowTestPage(v > 0);
-				return json{ { "ok", true }, { "setting", key }, { "saved", false }, { "menuPage", v > 0 } };
+				// the menu framework draws that window on its own thread: the flag is set from the main thread, never this listener
+				const bool open = v > 0;
+				auto       shown = DevBenchGlue::OnMainThread([open]() {
+					ShowTestPage(open);
+					return json{ { "ok", true }, { "setting", "menuPage" }, { "saved", false }, { "menuPage", open } };
+				});
+				return shown ? *shown : DevBenchGlue::NotRunYet();
 			}
 			const auto change = ChangeOf(key, v);
 			if (!change) {

@@ -31,7 +31,7 @@ namespace
 #define CHECK(x) Check((x), #x, __LINE__)
 
 	// the fewest checks a whole run makes (raise it when checks are added; lower it only when checks are removed on purpose)
-	constexpr int kFloor = 188 + FloorLightChecks::kCount;
+	constexpr int kFloor = 192 + FloorLightChecks::kCount;
 
 	[[nodiscard]] bool Near(float a, float b, float a_eps = 0.001f) { return std::fabs(a - b) <= a_eps; }
 
@@ -177,6 +177,11 @@ namespace
 		Anima::Settings d;
 		CHECK(d.on && !d.natural && d.brightness == 100 && d.reach == 100 && d.flicker && d.deathFade && d.surge);
 		CHECK(std::ranges::none_of(d.onTop, [](bool a_on) { return a_on; }));  // ours steps aside for every other mod by default
+		// the menu's steps of 5, inside the bounds: the slider and the settings file use the one snap
+		CHECK(Anima::SnapPercent(102, Anima::kReachMin, Anima::kReachMax) == 100 && Anima::SnapPercent(103, Anima::kReachMin, Anima::kReachMax) == 105);
+		CHECK(Anima::SnapPercent(0, Anima::kReachMin, Anima::kReachMax) == Anima::kReachMin);
+		CHECK(Anima::SnapPercent(100000, Anima::kBrightnessMin, Anima::kBrightnessMax) == Anima::kBrightnessMax);
+		CHECK(Anima::SnapPercent(-100000, Anima::kBrightnessMin, Anima::kBrightnessMax) == Anima::kBrightnessMin);
 		CHECK(d.kinds[0] && d.kinds[1] && d.kinds[2] && d.kinds[3]);
 
 		Anima::Settings s;

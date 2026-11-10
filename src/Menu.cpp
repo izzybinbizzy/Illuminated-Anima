@@ -82,12 +82,16 @@ namespace Plugin
 		// a percent slider in steps of 5: live while dragged, saved when let go
 		void Percent(const char* a_label, int Anima::Settings::* a_field, int a_min, int a_max, const char* a_tip)
 		{
-			int v = SettingsNow().*a_field;
+			const int current = SettingsNow().*a_field;
+			int       v = current;
 			SetNextItemWidth(260.0f);
 			if (SliderInt(a_label, &v, a_min, a_max, "%d%%")) {
-				v = std::clamp((std::clamp(v, a_min, a_max) + 2) / 5 * 5, a_min, a_max);
-				UpdateSettings([&](Anima::Settings& a_s) { a_s.*a_field = v; });
-				AppliedLive();
+				v = Anima::SnapPercent(v, a_min, a_max);
+				// a drag that snaps back to the stored step changes nothing, so the lights are not dropped and picked again for it
+				if (v != current) {
+					UpdateSettings([&](Anima::Settings& a_s) { a_s.*a_field = v; });
+					AppliedLive();
+				}
 			}
 			if (IsItemDeactivatedAfterEdit()) {
 				Changed();

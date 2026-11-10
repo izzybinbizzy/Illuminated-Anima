@@ -19,8 +19,8 @@ namespace Plugin
 		// clamped in the menu's steps of 5, whoever set it - the menu or the file; under gLock
 		void Clamp(Anima::Settings& a_s)
 		{
-			a_s.brightness = std::clamp((std::clamp(a_s.brightness, Anima::kBrightnessMin, Anima::kBrightnessMax) + 2) / 5 * 5, Anima::kBrightnessMin, Anima::kBrightnessMax);
-			a_s.reach = std::clamp((std::clamp(a_s.reach, Anima::kReachMin, Anima::kReachMax) + 2) / 5 * 5, Anima::kReachMin, Anima::kReachMax);
+			a_s.brightness = Anima::SnapPercent(a_s.brightness, Anima::kBrightnessMin, Anima::kBrightnessMax);
+			a_s.reach = Anima::SnapPercent(a_s.reach, Anima::kReachMin, Anima::kReachMax);
 		}
 	}
 

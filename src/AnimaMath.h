@@ -436,6 +436,12 @@ namespace Anima
 
 	inline constexpr int kBrightnessMin = 10, kBrightnessMax = 300, kReachMin = 25, kReachMax = 300;
 
+	// a percent setting in the menu's steps of 5, inside its bounds - the menu's slider and the settings file alike
+	[[nodiscard]] constexpr int SnapPercent(int a_value, int a_min, int a_max) noexcept
+	{
+		return std::clamp((std::clamp(a_value, a_min, a_max) + 2) / 5 * 5, a_min, a_max);
+	}
+
 	struct Settings
 	{
 		bool                      on{ true };
