@@ -31,7 +31,7 @@ namespace
 #define CHECK(x) Check((x), #x, __LINE__)
 
 	// the fewest checks a whole run makes (raise it when checks are added; lower it only when checks are removed on purpose)
-	constexpr int kFloor = 192 + FloorLightChecks::kCount;
+	constexpr int kFloor = 196 + FloorLightChecks::kCount;
 
 	[[nodiscard]] bool Near(float a, float b, float a_eps = 0.001f) { return std::fabs(a - b) <= a_eps; }
 
@@ -182,6 +182,12 @@ namespace
 		CHECK(Anima::SnapPercent(0, Anima::kReachMin, Anima::kReachMax) == Anima::kReachMin);
 		CHECK(Anima::SnapPercent(100000, Anima::kBrightnessMin, Anima::kBrightnessMax) == Anima::kBrightnessMax);
 		CHECK(Anima::SnapPercent(-100000, Anima::kBrightnessMin, Anima::kBrightnessMax) == Anima::kBrightnessMin);
+		// a skin's addons that count: those a wearing race takes; all of them with no wearer known, or none that fits
+		const auto fits = [](int a_addon, int a_race) { return a_addon == a_race; };
+		CHECK((Anima::AddonsWorn(std::vector{ 1, 2, 3 }, std::vector{ 2 }, fits) == std::vector{ 2 }));
+		CHECK((Anima::AddonsWorn(std::vector{ 1, 2, 3 }, std::vector{ 3, 1 }, fits) == std::vector{ 1, 3 }));
+		CHECK((Anima::AddonsWorn(std::vector{ 1, 2, 3 }, std::vector<int>{}, fits) == std::vector{ 1, 2, 3 }));
+		CHECK((Anima::AddonsWorn(std::vector{ 1, 2, 3 }, std::vector{ 9 }, fits) == std::vector{ 1, 2, 3 }));
 		CHECK(d.kinds[0] && d.kinds[1] && d.kinds[2] && d.kinds[3]);
 
 		Anima::Settings s;

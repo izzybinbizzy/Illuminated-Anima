@@ -107,8 +107,9 @@ namespace Plugin
 					return;
 				}
 				races.push_back(a_race);
+				// wide on purpose: a creature whose race changes at run time still passes, and BodyModels takes its race's addons
 				for (auto* addon : a_skin->armorAddons) {
-					if (!Wears(addon, a_race)) {
+					if (!addon) {
 						continue;
 					}
 					for (auto& model : addon->bipedModels) {
@@ -238,8 +239,8 @@ namespace Plugin
 	{
 		std::array<std::vector<std::string>, Anima::kOthers> gReplaced;  // per other mod: the names of our creatures its config lights
 
-		// which of our creatures each other mod's config lights instead of us: a row's own body models, and the models every skin of
-		// each race a row names wears (for the menu's warning)
+		// which of our creatures each other mod's config lights instead of us: a row's own body models, and the models of every skin its races
+		// wear - a race's own and its NPCs' (for the menu's warning)
 		void FindReplaced()
 		{
 			gReplaced = {};
@@ -252,13 +253,9 @@ namespace Plugin
 			}
 			for (const auto& [skin, rows] : gBySkin) {
 				const auto wearers = gSkinRaces.find(skin);
-				const auto worn = [&](const RE::TESObjectARMA* a_addon) {
-					return wearers == gSkinRaces.end() || std::ranges::any_of(wearers->second, [&](RE::TESRace* a_race) { return Wears(a_addon, a_race); });
-				};
-				// no wearer known to take any of its addons (a race read off a template): every addon counts
-				const bool known = std::ranges::any_of(skin->armorAddons, worn);
-				for (auto* addon : skin->armorAddons) {
-					if (!addon || (known && !worn(addon))) {
+				const auto worn = Anima::AddonsWorn(skin->armorAddons, wearers != gSkinRaces.end() ? wearers->second : std::vector<RE::TESRace*>{}, Wears);
+				for (auto* addon : worn) {
+					if (!addon) {
 						continue;
 					}
 					for (auto& model : addon->bipedModels) {
