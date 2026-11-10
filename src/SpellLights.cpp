@@ -13,8 +13,8 @@
 // RE::Light files, only when the download carries them and RE::Light runs: a record with a config there is lit by RE::Light, which
 // hangs an "RL" light on the reference as it loads, so the record keeps its own light and no light of ours is pointed at it. Nothing
 // announces those lights, so each kind of reference RE::Light lights is hooked after it (its Load3D hooks go in at plugin load, ours at
-// data load, so the original call runs its light-making first), and a row the menu switched off culls them there. Without the files
-// no hook goes in at all.
+// data load, so the original call runs its light-making first), and a row the menu switched off culls them there - but never on a record
+// another mod's RE::Light file names too, whose light may be theirs. Without the files no hook goes in at all.
 
 #include "Plugin.h"
 
@@ -33,10 +33,12 @@ namespace Plugin
 			const RE::TESForm*  record{ nullptr };
 			const char*         model{ nullptr };  // what RE::Light's mesh keys are matched on; none for a casting art, which it cannot reach
 			bool                inFiles{ false };  // an RE::Light file of ours lights this record
+			bool                shared{ false };   // another mod's RE::Light file names it too: its "RL" light may be theirs, never culled
 		};
 		std::vector<Target> gTargets;
 
-		constexpr const char* kReLightFiles = "Data/SKSE/Plugins/ReLight/Configs/Illuminated Anima";
+		constexpr const char*       kReLightConfigs = "Data/SKSE/Plugins/ReLight/Configs";
+		constexpr std::wstring_view kOurFolder = L"illuminated anima";  // ours, under kReLightConfigs (lower case)
 
 		// written at data load before any hook goes in; read from loader threads
 		std::unordered_map<RE::FormID, std::size_t> gInFiles;  // a base record -> its place in gTargets
@@ -77,18 +79,33 @@ namespace Plugin
 			static inline REL::Relocation<decltype(thunk)> func;
 		};
 
-		// which records our RE::Light files name, by their base form or a mesh key; none unless RE::Light runs and the files are there
-		void FindFileRows()
+		struct ConfigKeys
 		{
-			if (!REX::W32::GetModuleHandleA("ReLight.dll")) {
-				return;
-			}
 			std::vector<std::string>               keys;
 			std::unordered_set<const RE::TESForm*> bases;
-			std::error_code                        ec;
+		};
+
+		[[nodiscard]] bool IsOurFolder(const std::filesystem::path& a_path)
+		{
+			const auto name = a_path.filename().wstring();
+			return std::ranges::equal(name, kOurFolder, [](wchar_t a, wchar_t b) { return std::towlower(a) == b; });
+		}
+
+		// the mesh keys and base forms the RE::Light configs under kReLightConfigs name: ours (our folder) or every other mod's
+		void ReadConfigs(bool a_ours, ConfigKeys& a_out)
+		{
+			std::error_code ec;
+			const auto      root = std::filesystem::current_path(ec) / kReLightConfigs;
 			using enum std::filesystem::directory_options;
-			for (std::filesystem::recursive_directory_iterator it(std::filesystem::current_path() / kReLightFiles, skip_permission_denied, ec), end; !ec && it != end; it.increment(ec)) {
+			for (std::filesystem::recursive_directory_iterator it(root, skip_permission_denied, ec), end; !ec && it != end; it.increment(ec)) {
 				std::error_code one;
+				if (it.depth() == 0 && it->is_directory(one) && IsOurFolder(it->path()) != a_ours) {
+					it.disable_recursion_pending();
+					continue;
+				}
+				if (it.depth() == 0 && a_ours) {
+					continue;  // a file straight in the configs folder is no file of ours
+				}
 				if (!it->is_regular_file(one) || it->path().extension() != ".json") {
 					continue;
 				}
@@ -104,29 +121,50 @@ namespace Plugin
 					if (const auto mesh = entry.find("meshPath"); mesh != entry.end() && mesh->is_array()) {
 						for (const auto& key : *mesh) {
 							if (key.is_string()) {
-								keys.push_back(key.get<std::string>());
+								a_out.keys.push_back(key.get<std::string>());
 							}
 						}
 					}
 					if (const auto id = entry.find("baseID"); id != entry.end() && id->is_string()) {
 						if (const auto* form = FormOfKey(id->get<std::string>())) {
-							bases.insert(form);
+							a_out.bases.insert(form);
 						}
 					}
 				}
 			}
-			if (keys.empty() && bases.empty()) {
+		}
+
+		[[nodiscard]] bool Names(const ConfigKeys& a_files, const Target& a_t)
+		{
+			return a_t.record && (a_files.bases.contains(a_t.record) || (a_t.model && Anima::MeshKeyNames(a_t.model, a_files.keys)));
+		}
+
+		// which records our RE::Light files name, by their base form or a mesh key; none unless RE::Light runs and the files are there
+		void FindFileRows()
+		{
+			if (!REX::W32::GetModuleHandleA("ReLight.dll")) {
 				return;
 			}
+			ConfigKeys ours;
+			ReadConfigs(true, ours);
+			if (ours.keys.empty() && ours.bases.empty()) {
+				return;
+			}
+			ConfigKeys others;
+			ReadConfigs(false, others);
 			gCull.assign(gTargets.size(), false);
+			std::size_t shared = 0;
 			for (std::size_t i = 0; i < gTargets.size(); ++i) {
 				auto& t = gTargets[i];
-				if (t.record && (bases.contains(t.record) || (t.model && Anima::MeshKeyNames(t.model, keys)))) {
+				if (Names(ours, t)) {
 					t.inFiles = true;
+					t.shared = Names(others, t);
+					shared += t.shared ? 1 : 0;
 					gInFiles.try_emplace(t.record->GetFormID(), i);
 				}
 			}
-			SKSE::log::info("creature spells: RE::Light runs with our files: {} record(s) lit by them", gInFiles.size());
+			SKSE::log::info("creature spells: RE::Light runs with our files: {} record(s) lit by them, {} also named by another mod's file (never culled)",
+				gInFiles.size(), shared);
 			if (gInFiles.empty()) {
 				return;
 			}
@@ -265,8 +303,9 @@ namespace Plugin
 			// another mod's Light Placer file on this art lights it instead: ours steps aside, as on a creature's body
 			const bool shown = t.row < rows.size() && Anima::Shown(rows[t.row], a_s) && !RowModelsAside(t.row, a_s);
 			if (t.inFiles) {
-				gCull[i] = !shown;
-				anyCull = anyCull || !shown;
+				const bool cull = !shown && !t.shared;
+				gCull[i] = cull;
+				anyCull = anyCull || cull;
 			}
 			const bool ours = shown && !t.inFiles;
 			if (ours) {

@@ -18,7 +18,8 @@ The plugin of Illuminated Anima, an all-in-one lighting mod for creatures: no pl
 ## Requires
 
 SKSE and Address Library for SKSE Plugins; SKSE Menu Framework for the menu. Skyrim VR: SKSE VR and the VR version of Address Library,
-with the VR build (a build on the wrong game stays off and says so in a box). The VR build is compiled, never played by the author.
+with the VR build (a build on the wrong game stays off and says so in a box). The lights' motion on VR needs VR Address Library 0.295.0
+or newer (the first with the game's dimmer); with an older one the lights hold steady. The VR build is compiled, never played by the author.
 
 ## Settings
 

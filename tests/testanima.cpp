@@ -30,7 +30,7 @@ namespace
 #define CHECK(x) Check((x), #x, __LINE__)
 
 	// the fewest checks a whole run makes (raise it when checks are added; lower it only when checks are removed on purpose)
-	constexpr int kFloor = 157;
+	constexpr int kFloor = 188;
 
 	[[nodiscard]] bool Near(float a, float b, float a_eps = 0.001f) { return std::fabs(a - b) <= a_eps; }
 
@@ -87,6 +87,10 @@ namespace
 		CHECK(b.kind == Anima::Kind::kEyes);
 		CHECK(b.element == Anima::Element::kIce);
 		CHECK((b.rgb == Anima::Rgb{ 255, 0, 13 }));
+		std::istringstream huge("[creature]\nrace=X\ncolor=1e30,-1e30,0\n");  // clamped before the cast to int
+		std::size_t        hugeSkipped = 0;
+		const auto         hugeRows = Anima::ReadCreatures(huge, hugeSkipped);
+		CHECK(hugeRows.size() == 1 && (hugeRows[0].rgb == Anima::Rgb{ 255, 0, 0 }));
 		CHECK(Near(b.reach, 2048.0f));
 		CHECK(Near(b.strength, 1.0f));
 		CHECK(b.points.size() == 2);
@@ -171,7 +175,7 @@ namespace
 	{
 		Anima::Settings d;
 		CHECK(d.on && !d.natural && d.brightness == 100 && d.reach == 100 && d.flicker && d.deathFade && d.surge);
-		CHECK(!d.onTop[0] && !d.onTop[1] && !d.onTop[2] && !d.onTop[3]);  // ours steps aside for every other mod by default
+		CHECK(std::ranges::none_of(d.onTop, [](bool a_on) { return a_on; }));  // ours steps aside for every other mod by default
 		CHECK(d.kinds[0] && d.kinds[1] && d.kinds[2] && d.kinds[3]);
 
 		Anima::Settings s;
@@ -373,6 +377,12 @@ namespace
 		CHECK(rising);
 		const auto other = Anima::FadeKeys(2.0f, Pulse::Kind::kFire, 8u, Anima::kLoopSeconds, false);
 		CHECK(!Near(fire[100].value, other[100].value) || !Near(fire[200].value, other[200].value));  // two creatures do not move together
+		// every shape, its period dividing the loop or not: no jump at the seam, every key a number inside the flicker's range
+		for (std::size_t k = 0; k < Pulse::kNames.size(); ++k) {
+			const auto loop = Anima::FadeKeys(2.0f, static_cast<Pulse::Kind>(k), 7u, Anima::kLoopSeconds, false);
+			CHECK(loop.size() == 361 && Near(loop.front().value, loop.back().value));
+			CHECK(std::ranges::all_of(loop, [](const Anima::Key& a_k) { return std::isfinite(a_k.value) && a_k.value >= 0.1f - 0.001f && a_k.value <= 4.0f + 0.001f; }));
+		}
 
 		const auto surge = Anima::FadeKeys(1.0f, Pulse::Kind::kNone, 7u, Anima::kSurgeSeconds, true);
 		CHECK(surge.size() == 19);

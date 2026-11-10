@@ -106,9 +106,30 @@ namespace Plugin
 			replace(a_data, a_keys, a_count, RE::NiAnimationKey::KeyType::kLink);
 		}
 
+		// the dimmer's five ids are in the VR Address Library only from 0.295.0, and a missing id stops the game at its first use -
+		// so with an older one no keys are made and each light holds its fade
+		[[nodiscard]] bool DimmerReady()
+		{
+#ifdef ENABLE_SKYRIM_VR
+			static const bool ready = [] {
+				const bool ok = REL::IDDB::get().IsVRAddressLibraryAtLeastVersion("0.295.0");
+				if (!ok) {
+					SKSE::log::warn("VR Address Library older than 0.295.0: creature lights hold steady (no flicker, death fade or surge) until it is updated");
+				}
+				return ok;
+			}();
+			return ready;
+#else
+			return true;
+#endif
+		}
+
 		// keys the game can play; empty when it would not make them (the light then simply holds its fade)
 		[[nodiscard]] RE::NiPointer<RE::NiFloatInterpolator> MakeKeys(const std::vector<Anima::Key>& a_keys)
 		{
+			if (!DimmerReady()) {
+				return {};
+			}
 			RE::NiPointer<RE::NiFloatInterpolator> interpolator(NewInterpolator());
 			const RE::NiPointer<RE::NiFloatData>   data(NewFloatData());
 			if (!interpolator || !data || a_keys.size() < 2) {
@@ -439,7 +460,11 @@ namespace Plugin
 				const auto& row = Rows()[one.row];
 				const float end = one.fade * Anima::DeathShare(Anima::kDeathFadeSeconds, a_s.deathFade, row.ember);
 				const float now = one.light ? one.light->GetLightRuntimeData().fade : one.fade;
-				Play(one, MakeKeys(Anima::DeathKeys(now, end, a_s.deathFade)), a_s.deathFade ? Anima::kDeathFadeSeconds : 0.05f, false);
+				if (const auto keys = MakeKeys(Anima::DeathKeys(now, end, a_s.deathFade))) {
+					Play(one, keys, a_s.deathFade ? Anima::kDeathFadeSeconds : 0.05f, false);
+				} else if (one.light) {
+					one.light->GetLightRuntimeData().fade = end;  // no keys to play (an old VR Address Library): straight to its end
+				}
 				one.loop.reset();
 				one.cast.reset();
 			}

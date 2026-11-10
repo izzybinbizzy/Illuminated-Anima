@@ -33,7 +33,8 @@ namespace Plugin
 		[[nodiscard]] bool EnbFilesLeft()
 		{
 			std::error_code ec;
-			return std::ranges::any_of(kEnbFiles, [&](const char* a_file) { return std::filesystem::exists(std::filesystem::current_path() / a_file, ec); });
+			const auto      root = std::filesystem::current_path(ec);  // the non-throwing form
+			return !ec && std::ranges::any_of(kEnbFiles, [&](const char* a_file) { return std::filesystem::exists(root / a_file, ec); });
 		}
 
 		[[nodiscard]] bool CommunityShadersLoaded() { return REX::W32::GetModuleHandleA("CommunityShaders.dll") != nullptr; }

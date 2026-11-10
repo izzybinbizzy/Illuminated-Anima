@@ -229,7 +229,7 @@ namespace Anima
 					return false;
 				}
 				for (std::size_t i = 0; i < 3; ++i) {
-					a_row.rgb[i] = std::clamp(static_cast<int>((*n)[i] + 0.5f), 0, 255);
+					a_row.rgb[i] = static_cast<int>(std::clamp((*n)[i], 0.0f, 255.0f) + 0.5f);  // clamped first: a huge number cast to int is undefined
 				}
 			} else if (key == "reach") {
 				if (const auto n = Numbers(a_value, 1); n && n->size() == 1) {
@@ -625,7 +625,7 @@ namespace Anima
 		float value{ 0.0f };
 	};
 	inline constexpr float kKeysPerSecond = 30.0f;  // the shortest shape in Pulse.h (a shock spike) is 45 ms
-	inline constexpr float kLoopSeconds = 12.0f;    // the flicker's loop: every repeating shape's period divides it
+	inline constexpr float kLoopSeconds = 12.0f;    // the flicker's loop; not every shape's period divides it, so the seam eases (below)
 	inline constexpr float kCastSeconds = 60.0f;    // a cast's keys: its surge, then this long of its flicker before the loop comes round
 	inline constexpr float kSeamSeconds = 0.25f;    // the last stretch of a loop eases to its first value, so nothing jumps at the seam
 

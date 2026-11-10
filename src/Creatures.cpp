@@ -41,7 +41,8 @@ namespace Plugin
 		{
 			std::error_code                    ec;
 			std::vector<std::filesystem::path> files;
-			for (std::filesystem::directory_iterator it(std::filesystem::current_path() / kFolder, ec), end; !ec && it != end; it.increment(ec)) {
+			const auto                         root = std::filesystem::current_path(ec);  // the non-throwing form: no exception at data load
+			for (std::filesystem::directory_iterator it(root / kFolder, ec), end; !ec && it != end; it.increment(ec)) {
 				std::error_code one;
 				if (it->is_regular_file(one) && Lower(Utf8(it->path().extension())) == ".txt") {
 					files.push_back(it->path());
@@ -139,7 +140,7 @@ namespace Plugin
 				return;
 			}
 			std::error_code ec;
-			const auto      root = std::filesystem::current_path() / "Data" / "LightPlacer";
+			const auto      root = std::filesystem::current_path(ec) / "Data" / "LightPlacer";
 			std::size_t     files = 0;
 			using enum std::filesystem::directory_options;
 			for (std::filesystem::recursive_directory_iterator it(root, skip_permission_denied, ec), end; !ec && it != end; it.increment(ec)) {
@@ -545,7 +546,7 @@ namespace Plugin
 
 	bool CouldLight(RE::Actor* a_actor)
 	{
-		return gByRace.contains(a_actor->GetRace()) || gRowSkins.contains(SkinOf(a_actor));
+		return a_actor && (gByRace.contains(a_actor->GetRace()) || gRowSkins.contains(SkinOf(a_actor)));
 	}
 
 	bool RowModelsAside(std::size_t a_row, const Anima::Settings& a_s)

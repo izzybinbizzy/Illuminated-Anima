@@ -152,7 +152,14 @@ namespace Plugin
 				ApplyNow();
 				return SettingsJson(SettingsNow());
 			});
-			if (!now || DevBenchGlue::Refused(*now)) {
+			if (now && DevBenchGlue::Refused(*now)) {
+				// nothing was queued, or the change failed on the main thread: the refusal says which; the live table holds the change
+				auto j = *now;
+				j["setting"] = key;
+				j["saved"] = saved;
+				return j;
+			}
+			if (!now) {
 				// the live table holds the change already and the task is queued: only this answer did not wait for it
 				return json{ { "ok", true }, { "setting", key }, { "saved", saved }, { "applied", "when the game runs its queued task" },
 					{ "settings", SettingsJson(SettingsNow()) } };
