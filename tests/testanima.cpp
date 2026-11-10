@@ -1,0 +1,423 @@
+// Illuminated Anima - tests for src/AnimaMath.h (no game needed).
+// Copyright (C) 2026 izzydoingit. GPL-3.0-or-later.
+//
+// PC Runner\plugin build.py builds and runs them (xmake target testanima), then again under clang's address and
+// undefined-behavior checkers. The run fails when a check fails, AND when fewer checks ran than kFloor (a test that stopped
+// part way proves nothing).
+
+#include "AnimaMath.h"
+
+#include <cmath>
+#include <cstdio>
+#include <sstream>
+#include <string>
+
+namespace
+{
+	int gFailed = 0, gPassed = 0;
+
+	void Check(bool a_ok, const char* a_what, int a_line)
+	{
+		if (a_ok) {
+			++gPassed;
+		} else {
+			++gFailed;
+			if (gFailed <= 30) {
+				std::printf("FAIL line %d: %s\n", a_line, a_what);
+			}
+		}
+	}
+#define CHECK(x) Check((x), #x, __LINE__)
+
+	// the fewest checks a whole run makes (raise it when checks are added; lower it only when checks are removed on purpose)
+	constexpr int kFloor = 157;
+
+	[[nodiscard]] bool Near(float a, float b, float a_eps = 0.001f) { return std::fabs(a - b) <= a_eps; }
+
+	void CreatureFiles()
+	{
+		std::istringstream in(
+			"\xEF\xBB\xBF# a comment\n"
+			"[creature]\n"
+			"name=Flame Atronach\n"
+			"race=AtronachFlameRace\n"
+			"element=fire\n"
+			"color=255,140,40\n"
+			"point=0,-0.7,94.4\n"
+			"reach=512\n"
+			"ember=yes\n"
+			"\n"
+			"[creature]\n"
+			"name=no creature named\n"
+			"color=1,2,3\n"
+			"[creature]\n"
+			"name=bad color\n"
+			"race=X\n"
+			"color=red\n"
+			"[creature]\n"
+			"name=Familiar\n"
+			"model=Meshes/Actors/Canine/Character Assets Wolf/WolfFire.nif ; a trailing comment\n"
+			"kind=eyes\n"
+			"element=ice\n"
+			"color=300,-5,12.6\n"
+			"reach=99999\n"
+			"strength=abc\n"
+			"point=1,2,3\n"
+			"point=4,5,6\n"
+			"[other]\n"
+			"race=ignored\n");
+		std::size_t skipped = 0;
+		const auto  rows = Anima::ReadCreatures(in, skipped);
+		CHECK(rows.size() == 2);
+		CHECK(skipped == 2);
+		if (rows.size() != 2) {
+			return;
+		}
+		const auto& a = rows[0];
+		CHECK(a.name == "Flame Atronach");
+		CHECK(a.races.size() == 1 && a.races[0] == "atronachflamerace");
+		CHECK(a.element == Anima::Element::kFire);
+		CHECK(a.kind == Anima::Kind::kGlow);
+		CHECK((a.rgb == Anima::Rgb{ 255, 140, 40 }));
+		CHECK(a.points.size() == 1 && Near(a.points[0].z, 94.4f) && Near(a.points[0].y, -0.7f));
+		CHECK(Near(a.reach, 512.0f));
+		CHECK(a.ember);
+		const auto& b = rows[1];
+		CHECK(b.models.size() == 1 && b.models[0] == "actors\\canine\\character assets wolf\\wolffire.nif");
+		CHECK(b.kind == Anima::Kind::kEyes);
+		CHECK(b.element == Anima::Element::kIce);
+		CHECK((b.rgb == Anima::Rgb{ 255, 0, 13 }));
+		CHECK(Near(b.reach, 2048.0f));
+		CHECK(Near(b.strength, 1.0f));
+		CHECK(b.points.size() == 2);
+		CHECK(!b.ember);
+
+		std::istringstream spell("[creature]\nkind=burst\nrecord=0x19531~Dragonborn.esm\nsize=99\ncolor=255,140,40\n[creature]\nkind=spell\nsize=1.98\n");
+		std::size_t        s1 = 0;
+		const auto         sp = Anima::ReadCreatures(spell, s1);
+		CHECK(sp.size() == 1 && s1 == 1);  // a row naming no creature, model or record is left out
+		CHECK(!sp.empty() && sp[0].kind == Anima::Kind::kBurst && sp[0].records.size() == 1 && sp[0].records[0] == "0x19531~Dragonborn.esm");
+		CHECK(!sp.empty() && Near(sp[0].size, 8.0f));
+
+		// on a bone: one light per offset, or one on the bone itself; on a body without it: the row's points
+		std::istringstream bone("[creature]\nrace=X\nnode=FireAtronach_Spine2 [Spn2]\noffset=0,0,5.8\noffset=1,2,3\noffset=bad\npoint=0,-0.7,94.4\n[creature]\nrace=Y\nnode=Z\npoint=1,1,1\npoint=2,2,2\n");
+		std::size_t        s4 = 0;
+		const auto         bones = Anima::ReadCreatures(bone, s4);
+		CHECK(bones.size() == 2 && s4 == 0);
+		if (bones.size() == 2) {
+			CHECK(bones[0].nodes.size() == 1 && bones[0].nodes[0] == "FireAtronach_Spine2 [Spn2]");
+			CHECK(bones[0].offsets.size() == 2);
+			const auto onIt = Anima::SpotsOn(bones[0], true);
+			CHECK(onIt.size() == 2 && Near(onIt[0].z, 5.8f) && Near(onIt[1].y, 2.0f));
+			const auto offIt = Anima::SpotsOn(bones[0], false);
+			CHECK(offIt.size() == 1 && Near(offIt[0].z, 94.4f));
+			const auto bare = Anima::SpotsOn(bones[1], true);
+			CHECK(bare.size() == 1 && Near(bare[0].x, 0.0f) && Near(bare[0].z, 0.0f));
+			CHECK(Anima::SpotsOn(bones[1], false).size() == 2);
+		}
+
+		std::istringstream none("[creature]\nrace=X\ncolor=1,2,3\n");
+		std::size_t        s2 = 0;
+		const auto         one = Anima::ReadCreatures(none, s2);
+		CHECK(one.size() == 1 && one[0].points.size() == 1 && Near(one[0].points[0].z, 0.0f));
+		std::istringstream empty("");
+		std::size_t        s3 = 0;
+		CHECK(Anima::ReadCreatures(empty, s3).empty() && s3 == 0);
+
+		// nan and inf read as numbers, and clamp lets a nan through: they never reach a light
+		std::istringstream notNumbers("[creature]\nrace=X\nstrength=nan\nreach=inf\n");
+		std::size_t        s6 = 0;
+		const auto         kept = Anima::ReadCreatures(notNumbers, s6);
+		CHECK(kept.size() == 1 && Near(kept[0].strength, 1.0f) && Near(kept[0].reach, 256.0f));
+	}
+
+	void Paths()
+	{
+		CHECK(Anima::NormalPath("Data/Meshes/Actors/A.NIF") == "actors\\a.nif");
+		CHECK(Anima::NormalPath("meshes\\x\\y.nif") == "x\\y.nif");
+		CHECK(Anima::NormalPath("Actors\\Wisp\\wisp.nif") == "actors\\wisp\\wisp.nif");
+		CHECK(Anima::Trim("  a b \r") == "a b");
+		CHECK(Anima::Trim("\xEF\xBB\xBFkey") == "key");
+		const auto n = Anima::Numbers("1, 2.5 ,-3", 3);
+		CHECK(n && n->size() == 3 && Near((*n)[1], 2.5f) && Near((*n)[2], -3.0f));
+		CHECK(!Anima::Numbers("1,x,3", 3));
+		CHECK(!Anima::Numbers("nan", 1));
+		CHECK(!Anima::Numbers("inf", 1));
+		CHECK(!Anima::Numbers("1,-inf,3", 3));
+		const std::vector<std::string> keys{ "AshProjectile01", "" };
+		CHECK(Anima::MeshKeyNames("Meshes/Magic/AshProjectile01.nif", keys));
+		CHECK(Anima::MeshKeyNames("magic\\xashprojectile01b.nif", keys));  // RE::Light matches by a part of the name
+		CHECK(!Anima::MeshKeyNames("ashprojectile01\\other.nif", keys));   // never by a folder
+		CHECK(!Anima::MeshKeyNames("", keys));
+		CHECK(!Anima::MeshKeyNames("a.nif", {}));
+	}
+
+	void Elements()
+	{
+		CHECK(Anima::Natural(Anima::Element::kIce));
+		CHECK(Anima::Natural(Anima::Element::kWind));
+		CHECK(Anima::Natural(Anima::Element::kWater));
+		CHECK(Anima::Natural(Anima::Element::kStone));
+		CHECK(!Anima::Natural(Anima::Element::kFire));
+		CHECK(!Anima::Natural(Anima::Element::kShock));
+		CHECK(!Anima::Natural(Anima::Element::kSpirit));
+		CHECK(Anima::PulseOf(Anima::Element::kFire) == Pulse::Kind::kFire);
+		CHECK(Anima::PulseOf(Anima::Element::kShock) == Pulse::Kind::kShock);
+		CHECK(Anima::PulseOf(Anima::Element::kStone) == Pulse::Kind::kNone);
+		CHECK(Anima::PulseOf(Anima::Element::kSpirit) == Pulse::Kind::kHealing);
+	}
+
+	void SettingsText()
+	{
+		Anima::Settings d;
+		CHECK(d.on && !d.natural && d.brightness == 100 && d.reach == 100 && d.flicker && d.deathFade && d.surge);
+		CHECK(!d.onTop[0] && !d.onTop[1] && !d.onTop[2] && !d.onTop[3]);  // ours steps aside for every other mod by default
+		CHECK(d.kinds[0] && d.kinds[1] && d.kinds[2] && d.kinds[3]);
+
+		Anima::Settings s;
+		s.on = false;
+		s.kinds[2] = false;
+		s.natural = true;
+		s.brightness = 150;
+		s.reach = 75;
+		s.flicker = false;
+		s.onTop = { true, false, true, false };
+		std::ostringstream out;
+		Anima::WriteSettings(s, out);
+		std::istringstream in(out.str());
+		Anima::Settings    r;
+		const auto         keys = Anima::ReadSettings(in, r);
+		CHECK(keys == 11 + Anima::kOthers);
+		CHECK(!r.on && !r.kinds[2] && r.kinds[1] && r.natural && r.brightness == 150 && r.reach == 75 && !r.flicker && r.deathFade);
+		CHECK(r.onTop[0] && !r.onTop[1] && r.onTop[2] && !r.onTop[3]);
+
+		std::istringstream odd("\xEF\xBB\xBF[Settings]\nBrightness=99999\nReach=abc\nUnknown=1\nLights = off\n; Reach=10\n");
+		Anima::Settings    o;
+		CHECK(Anima::ReadSettings(odd, o) == 3);
+		CHECK(o.brightness == Anima::kBrightnessMax);
+		CHECK(o.reach == 100);
+		CHECK(!o.on);
+	}
+
+	void Showing()
+	{
+		Anima::Row      fire;
+		Anima::Row      ice;
+		Anima::Settings s;
+		fire.element = Anima::Element::kFire;
+		ice.element = Anima::Element::kIce;
+		CHECK(Anima::Shown(fire, s));
+		CHECK(!Anima::Shown(ice, s));  // the elements that should not glow are off by default
+		s.natural = true;
+		CHECK(Anima::Shown(ice, s));
+		s.kinds[0] = false;
+		CHECK(!Anima::Shown(fire, s));
+		s.kinds[0] = true;
+		s.on = false;
+		CHECK(!Anima::Shown(fire, s));
+	}
+
+	void OtherMods()
+	{
+		CHECK(Anima::OtherModOf("illuminouselementals", "atronachflame") == std::optional<std::size_t>(1));
+		CHECK(Anima::OtherModOf("dareniis creatures", "atronacharcane") == std::optional<std::size_t>(2));
+		// the Emissive series by its exact folder and file; another mod's folder of the same plain name is not taken for it
+		CHECK(Anima::OtherModOf("atronachs", "flame atronach") == std::optional<std::size_t>(Anima::kEmissive));
+		CHECK(Anima::OtherModOf("spriggans", "spriggan") == std::optional<std::size_t>(Anima::kEmissive));
+		CHECK(Anima::OtherModOf("netch", "emissive netch") == std::optional<std::size_t>(Anima::kEmissive));
+		CHECK(Anima::OtherModOf("atronachs", "atronachflame") == std::optional<std::size_t>(Anima::kOtherUnnamed));
+		CHECK(Anima::OtherModOf("soul gems", "emissive soul gems") == std::optional<std::size_t>(Anima::kOtherUnnamed));
+		CHECK(!Anima::OtherModOf("illuminated", "explosions"));
+		CHECK(!Anima::OtherModOf("illuminatedanima", "x"));
+		CHECK(Anima::OtherModOf("magic creatures of radiance", "atronachflame") == std::optional<std::size_t>(Anima::kOtherUnnamed));
+	}
+
+	// the mods that light a creature through an ability, Luminous Atronachs' route: its plugin overrides the creature's own effect, and a
+	// script on that effect adds an ability of the plugin's whose effect carries the light
+	void AbilityLights()
+	{
+		const auto luminous = Anima::NamedPluginMod("luminousatronachs.esp");
+		CHECK(luminous && Anima::kOtherMods[*luminous].key == "OnTopLuminous");
+		if (!luminous) {
+			return;
+		}
+		CHECK(Anima::NamedPluginMod("luminousatronachs.esm") == luminous);
+		CHECK(Anima::NamedPluginMod("luminousatronachs") == luminous);
+		CHECK(!Anima::NamedPluginMod("skyrim.esm"));
+		CHECK(!Anima::NamedPluginMod("luminousatronachs - patch.esp"));
+		CHECK(!Anima::NamedPluginMod(""));
+
+		Anima::Lighters none{};
+		Anima::Lighters lit{};
+		lit[*luminous] = true;
+		const std::vector<std::string> game{ "skyrim.esm" };
+		const std::vector<std::string> overridden{ "skyrim.esm", "unofficial skyrim special edition patch.esp", "luminousatronachs.esp" };
+		const std::vector<std::string> made{ "luminousatronachs.esp" };
+		const std::vector<std::string> stranger{ "skyrim.esm", "someonesmod.esp" };
+
+		CHECK(!Anima::AbilityClaim(false, game, lit));                                                         // the game's own effect, no light of its own
+		CHECK(Anima::AbilityClaim(false, overridden, lit) == luminous);                                        // the script's route: an override + a lit ability in that plugin
+		CHECK(!Anima::AbilityClaim(false, overridden, none));                                                  // its download without lights overrides the effect and lights nothing
+		CHECK(!Anima::AbilityClaim(false, stranger, lit));                                                     // another plugin overriding the effect claims nothing
+		CHECK(Anima::AbilityClaim(true, made, none) == luminous);                                              // the effect itself carries the light: its maker's
+		CHECK(Anima::AbilityClaim(true, stranger, none) == std::optional<std::size_t>(Anima::kOtherUnnamed));  // first file skyrim.esm: not named
+		CHECK(Anima::AbilityClaim(true, {}, none) == std::optional<std::size_t>(Anima::kOtherUnnamed));
+		CHECK(!Anima::AbilityClaim(false, {}, lit));
+
+		// the same route in the other two: each plugin named by its own file, its download without lights claiming nothing
+		const auto enhanced = Anima::NamedPluginMod("enhancedatronachs.esp");
+		const auto illuminated = Anima::NamedPluginMod("lm_astronach.esp");
+		const auto eyes = Anima::NamedPluginMod("js emissive eyes se - johnskyrim.esp");
+		CHECK(enhanced && Anima::kOtherMods[*enhanced].key == "OnTopEnhanced");
+		CHECK(illuminated && Anima::kOtherMods[*illuminated].key == "OnTopIlluminatedAtronachs");
+		CHECK(eyes && Anima::kOtherMods[*eyes].key == "OnTopJSEyes");
+		if (enhanced && illuminated && eyes) {
+			Anima::Lighters withLights{};
+			withLights[*enhanced] = true;
+			const std::vector<std::string> effect{ "skyrim.esm", "enhancedatronachs.esp" };
+			CHECK(Anima::AbilityClaim(false, effect, withLights) == enhanced);
+			CHECK(!Anima::AbilityClaim(false, effect, none));
+			CHECK(!Anima::AbilityClaim(false, std::vector<std::string>{ "skyrim.esm", "lm_astronach.esp" }, withLights));  // not that mod's light
+			CHECK(!Anima::AbilityClaim(false, std::vector<std::string>{ "js emissive eyes se - johnskyrim.esp" }, none));  // eyes are art, no light
+		}
+		std::istringstream aside("[creature]\nrace=X\nasideif=0x807~JS Emissive Eyes SE - Johnskyrim.esp\nasideif=0x808~JS Emissive Eyes SE - Johnskyrim.esp\n");
+		std::size_t        s5 = 0;
+		const auto         asides = Anima::ReadCreatures(aside, s5);
+		CHECK(asides.size() == 1 && asides[0].asideIf.size() == 2 && asides[0].asideIf[1] == "0x808~JS Emissive Eyes SE - Johnskyrim.esp");
+		// a row named only by the skin it wears (two looks of one body model) is a creature, not a block left out
+		std::istringstream byskin("[creature]\nname=Elytra\nskin=0xA98~ccbgssse025-advdsgs.esm\ncolor=255,149,51\n");
+		std::size_t        s6 = 0;
+		const auto         skins = Anima::ReadCreatures(byskin, s6);
+		CHECK(skins.size() == 1 && s6 == 0);
+		CHECK(skins.size() == 1 && skins[0].skins.size() == 1 && skins[0].skins[0] == "0xA98~ccbgssse025-advdsgs.esm");
+
+		Anima::Settings s;
+		CHECK(!Anima::Aside(none, s));  // nobody lights it
+		CHECK(Anima::Aside(lit, s));    // ours steps aside by default
+		s.onTop[*luminous] = true;
+		CHECK(!Anima::Aside(lit, s));  // its switch puts ours on top
+		lit[Anima::kOtherUnnamed] = true;
+		CHECK(Anima::Aside(lit, s));  // a second mod lights it too and its switch is off: still aside
+		s.onTop[Anima::kOtherUnnamed] = true;
+		CHECK(!Anima::Aside(lit, s));
+	}
+
+	void OverTime()
+	{
+		CHECK(Near(Anima::DeathShare(0.0f, true, false), 1.0f));
+		CHECK(Near(Anima::DeathShare(Anima::kDeathFadeSeconds, true, false), 0.0f));
+		CHECK(Near(Anima::DeathShare(100.0f, true, true), Anima::kEmberShare));
+		CHECK(Near(Anima::DeathShare(0.0f, false, false), 0.0f));
+		CHECK(Near(Anima::DeathShare(0.0f, false, true), Anima::kEmberShare));
+		const float half = Anima::DeathShare(Anima::kDeathFadeSeconds / 2.0f, true, false);
+		CHECK(half > 0.4f && half < 0.6f);
+		float last = 2.0f;
+		bool  falling = true;
+		for (int i = 0; i <= 40; ++i) {
+			const float v = Anima::DeathShare(Anima::kDeathFadeSeconds * static_cast<float>(i) / 40.0f, true, true);
+			falling = falling && v <= last + 1e-6f;
+			last = v;
+		}
+		CHECK(falling);
+		CHECK(Near(Anima::SurgeLift(-1.0f), 1.0f));
+		CHECK(Near(Anima::SurgeLift(Anima::kSurgeSeconds), 1.0f));
+		CHECK(Near(Anima::SurgeLift(Anima::kSurgeSeconds * 0.15f), 1.0f + Anima::kSurgeLift));
+		CHECK(Anima::SurgeLift(Anima::kSurgeSeconds * 0.5f) > 1.0f);
+	}
+
+	// who gets a light within the cap: a corpse with nothing left to show must not keep a living creature dark
+	void TheCap()
+	{
+		using Chosen = std::vector<std::size_t>;
+		CHECK(Anima::ChooseLit({}, 5).empty());
+		CHECK((Anima::ChooseLit({ { false, 300.0f, 0 }, { false, 100.0f, 1 }, { false, 200.0f, 2 } }, 2) == Chosen{ 1, 2 }));  // the nearest
+		CHECK((Anima::ChooseLit({ { true, 10.0f, 0 }, { false, 900.0f, 1 } }, 1) == Chosen{ 1 }));                             // the living first
+		CHECK((Anima::ChooseLit({ { true, 10.0f, 0 }, { false, 900.0f, 1 } }, 2) == Chosen{ 1, 0 }));                          // an ember while there is room
+		CHECK((Anima::ChooseLit({ { false, 10.0f, 0, true }, { false, 900.0f, 1, false } }, 1) == Chosen{ 1 }));               // a glow before a pair of eyes
+		CHECK((Anima::ChooseLit({ { false, 10.0f, 0, true }, { true, 1.0f, 1, false } }, 1) == Chosen{ 0 }));                  // but the living first
+		CHECK((Anima::ChooseLit({ { false, 1.0f, 0 } }, 0).empty()));                                                          // no room at all
+		CHECK(Anima::KeepsLights(true, true, false, false));                                                                   // on the body it has
+		CHECK(!Anima::KeepsLights(true, false, false, true));                                                                  // the game stored another body
+		CHECK(!Anima::KeepsLights(true, true, true, false));                                                                   // its light has run out
+		CHECK(Anima::KeepsLights(false, false, false, true));                                                                  // its body is still on its way from the loader thread
+		CHECK(!Anima::KeepsLights(false, false, false, false));                                                                // its body has gone
+		// a body's own row before its race's: a lich on the dragon priest race wears its own light, not the priest's eyes beside it
+		CHECK((Anima::RowsFor({}, { 1, 2 }) == Chosen{ 1, 2 }));
+		CHECK((Anima::RowsFor({ 5 }, { 1, 2 }) == Chosen{ 5 }));
+		CHECK(Anima::RowsFor({}, {}).empty());
+	}
+
+	// the keys the game plays on a light's dimmer: no code of ours runs while they do, so each set has to be right alone
+	void Keys()
+	{
+		const auto top = [](const std::vector<Anima::Key>& a_keys) {
+			float most = 0.0f;
+			for (const auto& k : a_keys) {
+				most = (std::max)(most, k.value);
+			}
+			return most;
+		};
+		const auto steady = Anima::FadeKeys(2.0f, Pulse::Kind::kNone, 7u, Anima::kLoopSeconds, false);
+		CHECK(steady.size() == 361);
+		CHECK(Near(steady.front().time, 0.0f) && Near(steady.back().time, Anima::kLoopSeconds));
+		CHECK(std::ranges::all_of(steady, [](const Anima::Key& k) { return Near(k.value, 2.0f); }));
+
+		const auto fire = Anima::FadeKeys(2.0f, Pulse::Kind::kFire, 7u, Anima::kLoopSeconds, false);
+		CHECK(Near(fire.front().value, fire.back().value));  // a loop never jumps at its seam
+		CHECK(top(fire) > 2.0f && top(fire) <= 4.0f);
+		CHECK(std::ranges::any_of(fire, [](const Anima::Key& k) { return k.value < 1.9f; }));  // it moves
+		bool rising = true;
+		for (std::size_t i = 1; i < fire.size(); ++i) {
+			rising = rising && fire[i].time > fire[i - 1].time;  // the game plays keys in time order
+		}
+		CHECK(rising);
+		const auto other = Anima::FadeKeys(2.0f, Pulse::Kind::kFire, 8u, Anima::kLoopSeconds, false);
+		CHECK(!Near(fire[100].value, other[100].value) || !Near(fire[200].value, other[200].value));  // two creatures do not move together
+
+		const auto surge = Anima::FadeKeys(1.0f, Pulse::Kind::kNone, 7u, Anima::kSurgeSeconds, true);
+		CHECK(surge.size() == 19);
+		CHECK(Near(surge.front().value, 1.0f) && Near(surge.back().value, 1.0f));  // from its fade, back to its fade
+		CHECK(top(surge) > 1.0f + Anima::kSurgeLift * 0.9f && top(surge) <= 1.0f + Anima::kSurgeLift + 0.001f);
+
+		const auto cast = Anima::FadeKeys(1.0f, Pulse::Kind::kFire, 7u, Anima::kCastSeconds, true);
+		const auto calm = Anima::FadeKeys(1.0f, Pulse::Kind::kFire, 7u, Anima::kCastSeconds, false);
+		CHECK(Near(cast.front().value, cast.back().value));
+		CHECK(cast[3].value > calm[3].value * 1.4f);  // the surge is on top of the flicker
+		CHECK(Near(cast[60].value, calm[60].value));  // and over by two seconds: only the flicker
+
+		const auto ember = Anima::DeathKeys(1.5f, 0.25f, true);
+		CHECK(Near(ember.front().value, 1.5f) && Near(ember.back().value, 0.25f));
+		CHECK(Near(ember.back().time, Anima::kDeathFadeSeconds));
+		bool falling = true;
+		for (std::size_t i = 1; i < ember.size(); ++i) {
+			falling = falling && ember[i].value <= ember[i - 1].value + 1e-5f;
+		}
+		CHECK(falling);
+		const auto at2 = ember[20].value;
+		CHECK(at2 > 0.5f && at2 < 1.3f);
+		const auto out = Anima::DeathKeys(1.5f, 0.0f, true);
+		CHECK(Near(out.back().value, 0.0f));
+		const auto once = Anima::DeathKeys(1.5f, 0.25f, false);  // the fade switched off: straight to the end, the game needs two keys
+		CHECK(once.size() == 2 && Near(once.front().value, 0.25f) && Near(once.back().value, 0.25f));
+	}
+}
+
+int main()
+{
+	CreatureFiles();
+	Paths();
+	Elements();
+	SettingsText();
+	Showing();
+	OtherMods();
+	AbilityLights();
+	TheCap();
+	OverTime();
+	Keys();
+	std::printf("%d passed, %d failed\n", gPassed, gFailed);
+	if (gPassed + gFailed < kFloor) {
+		std::printf("FAIL: only %d checks ran, fewer than the floor %d\n", gPassed + gFailed, kFloor);
+		return 1;
+	}
+	return gFailed ? 1 : 0;
+}
