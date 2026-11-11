@@ -183,11 +183,19 @@ namespace Plugin
 		}
 
 		// ---------------------------------------------------------------- the lights
+		// a light hung since the scene's last light pass still waits in its add queue, where the lookup by NiLight does not search
+		[[nodiscard]] bool WaitingToBeAdded(RE::ShadowSceneNode* a_scene, const RE::BSLight* a_bs)
+		{
+			auto&                     data = a_scene->GetRuntimeData();
+			const RE::BSSpinLockGuard guard(data.lightQueueLock);
+			return std::ranges::any_of(data.lightQueueAdd, [&](const RE::NiPointer<RE::BSLight>& a_queued) { return a_queued.get() == a_bs; });
+		}
+
 		void Drop(Lit& a_lit, RE::ShadowSceneNode* a_scene)
 		{
 			for (auto& one : a_lit.lights) {
 				// by its NiLight, the engine's own removal: a light Open Shaders' Promote made a shadow caster stays when removed by its BSLight
-				if (a_scene && one.light) {
+				if (a_scene && one.light && !(one.bs && WaitingToBeAdded(a_scene, one.bs.get()))) {
 					a_scene->RemoveLight(one.light.get());
 				} else if (a_scene && one.bs) {
 					a_scene->RemoveLight(one.bs);
