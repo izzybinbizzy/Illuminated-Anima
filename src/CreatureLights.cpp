@@ -357,8 +357,9 @@ namespace Plugin
 		void LookAt(RE::FormID a_id);
 
 		// the creatures lit within the cap, the living first, then the nearest; a creature whose body went or whose light has run out let
-		// go: at an event that can change them, never on a clock
-		void Pick(const Anima::Settings& a_s, const Arrivals& a_arrivals)
+		// go: at an event that can change them, never on a clock. a_follow: a creature that gains or loses our light is looked at again
+		// (false when the caller sets every creature's other lights itself)
+		void Pick(const Anima::Settings& a_s, const Arrivals& a_arrivals, bool a_follow)
 		{
 			auto* scene = LightKit::Scene();
 			auto* player = RE::PlayerCharacter::GetSingleton();
@@ -368,6 +369,9 @@ namespace Plugin
 				before.insert(id);
 			}
 			const auto lookAtChanged = [&]() {
+				if (!a_follow) {
+					return;
+				}
 				for (const auto id : before) {
 					if (!gLit.contains(id)) {
 						LookAt(id);
@@ -697,7 +701,7 @@ namespace Plugin
 			}
 			if (pick) {
 				const LightKit::Cost::Scope pickCost(kCostPick, "creature events: pick");
-				Pick(s, arrivals);
+				Pick(s, arrivals, true);
 			}
 			gLitCount = gLit.size();
 			if (!gLooking.empty() && !gLookQueued.load()) {
@@ -911,7 +915,7 @@ namespace Plugin
 					}
 				}
 			}
-			Pick(SettingsNow(), {});
+			Pick(SettingsNow(), {}, true);
 			LookAtEveryone();
 		}));
 	}
@@ -928,7 +932,7 @@ namespace Plugin
 			}
 		}
 		DropAll();
-		Pick(s, still);
+		Pick(s, still, false);
 		// a switch: every creature's other lights follow at once, those Pick does not hold a light for too
 		if (auto* lists = a_othersToo ? RE::ProcessLists::GetSingleton() : nullptr) {
 			for (const auto* handles : { &lists->highActorHandles, &lists->middleHighActorHandles }) {
