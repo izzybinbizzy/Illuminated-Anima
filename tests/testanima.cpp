@@ -318,6 +318,15 @@ namespace
 		CHECK(!Anima::TheirLightOut(false, false));  // ours does not show there (ice, a kind off): theirs stays
 	}
 
+	// which rows go on Illuminated's or RELight's picker, and the line each saves under
+	void Picker()
+	{
+		CHECK(Anima::OnThePicker(Anima::Kind::kGlow) && Anima::OnThePicker(Anima::Kind::kEyes) && Anima::OnThePicker(Anima::Kind::kMachines));
+		CHECK(!Anima::OnThePicker(Anima::Kind::kSpell) && !Anima::OnThePicker(Anima::Kind::kBurst));
+		CHECK(Anima::PickerKey("Flame Atronach") == "Creature|Flame Atronach");
+		CHECK(Anima::PickerKey("Flame Atronach").find('=') == std::string::npos);
+	}
+
 	// glowing eyes and machines are two switches, and JS Emissive Eyes takes only the eyes
 	void EyesAndMachines()
 	{
@@ -492,6 +501,7 @@ int main()
 	AbilityLights();
 	TheirLights();
 	EyesAndMachines();
+	Picker();
 	TheCap();
 	OverTime();
 	Keys();

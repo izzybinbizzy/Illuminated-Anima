@@ -208,10 +208,10 @@ namespace Plugin
 
 		// the light's fields from the strength and reach (Illuminated's way: inverse-square words on Community Shaders, else a plain
 		// light whose radius carries the reach, with a tenth of its color as ambient - RE::Light's rule)
-		void Dress(RE::NiPointLight* a_light, const Anima::Row& a_row, float a_strength, const Anima::Settings& a_s)
+		void Dress(RE::NiPointLight* a_light, const Anima::Row& a_row, float a_strength, const Anima::Settings& a_s, const std::optional<std::array<float, 3>>& a_picked)
 		{
 			auto&             data = a_light->GetLightRuntimeData();
-			const RE::NiColor color{ a_row.rgb[0] / 255.0f, a_row.rgb[1] / 255.0f, a_row.rgb[2] / 255.0f };
+			const RE::NiColor color = a_picked ? RE::NiColor{ (*a_picked)[0], (*a_picked)[1], (*a_picked)[2] } : RE::NiColor{ a_row.rgb[0] / 255.0f, a_row.rgb[1] / 255.0f, a_row.rgb[2] / 255.0f };
 			const float       reach = a_row.reach * static_cast<float>(a_s.reach) / 100.0f;
 			const float       strength = (std::max)(a_strength, 0.0f);
 			data.diffuse = color;
@@ -324,7 +324,7 @@ namespace Plugin
 					light->name = kName;
 					light->local.translate = { p.x, p.y, p.z };
 					light->GetLightRuntimeData().radius.x = -1.0f;  // the clone's own may equal ours: Dress attenuates it at once
-					Dress(light, row, strength, a_s);
+					Dress(light, row, strength, a_s, PickedColor(i));
 					// not portal strict: a creature's glow goes through doorways with it
 					RE::NiPointer<RE::BSLight> bs(LightKit::Hang(node, light, scene, 1.0f, false));
 					if (!bs) {

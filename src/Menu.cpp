@@ -157,6 +157,10 @@ namespace Plugin
 			Percent(T("Brightness"), &Anima::Settings::brightness, Anima::kBrightnessMin, Anima::kBrightnessMax, T("How bright every creature's light is."));
 			Percent(T("Reach"), &Anima::Settings::reach, Anima::kReachMin, Anima::kReachMax, T("How far every creature's light reaches."));
 
+			if (const char* owner = PickerOwner()) {
+				MenuStyle::Note(Translation::Fill(T("Pick a color per creature on {}'s Choose Your Own Color page."), owner).c_str());
+			}
+
 			Header(Icon::kBulb, T("Movement"));
 			Field(T("Flicker and pulse"), &Anima::Settings::flicker, T("Flame creatures flicker, storm creatures crackle, wisps and spirits breathe."));
 			Field(T("Fade on death"), &Anima::Settings::deathFade, T("A dying creature's light fades over a few seconds; a flame creature's remains keep a small ember."));

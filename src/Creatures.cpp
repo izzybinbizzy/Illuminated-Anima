@@ -10,6 +10,8 @@
 
 #include "Plugin.h"
 
+#include "FadePickerAPI.h"
+
 #include <bit>
 
 namespace Plugin
@@ -634,9 +636,79 @@ namespace Plugin
 		return worn != gWore.end() && Anima::GivenBack(worn->second, a_s);
 	}
 
+	namespace
+	{
+		// Illuminated's or RELight's Choose Your Own Color page, when one is installed: main thread after data load
+		const FadePicker::API*   gPicker{ nullptr };
+		const char*              gPickerOwner{ nullptr };
+		std::vector<std::string> gPickerKeys;  // by row; empty for a row not on the page
+
+		struct Picked
+		{
+			bool                 off{ false };
+			bool                 colored{ false };
+			std::array<float, 3> rgb{};
+		};
+
+		[[nodiscard]] std::optional<Picked> PickedFor(std::size_t a_row)
+		{
+			if (!gPicker || a_row >= gPickerKeys.size() || gPickerKeys[a_row].empty()) {
+				return std::nullopt;
+			}
+			Picked p;
+			return gPicker->choiceFor(gPickerKeys[a_row].c_str(), p.rgb.data(), &p.off, &p.colored) ? std::optional<Picked>(p) : std::nullopt;
+		}
+
+		void PickerChanged()
+		{
+			static_cast<void>(Later("color picked", []() { ApplyNow(false); }));
+		}
+	}
+
+	void OfferToPicker()
+	{
+		constexpr std::array<std::pair<const char*, const char*>, 2> providers{ { { "Illuminated.dll", "Illuminated" }, { "RELightSpellLightingNG.dll", "RELight" } } };
+		for (const auto& [dll, name] : providers) {
+			const auto handle = REX::W32::GetModuleHandleA(dll);
+			const auto request = handle ? reinterpret_cast<FadePicker::Request>(REX::W32::GetProcAddress(handle, FadePicker::kRequest)) : nullptr;
+			gPicker = request ? request(FadePicker::kVersion) : nullptr;
+			if (gPicker) {
+				gPickerOwner = name;
+				break;
+			}
+		}
+		if (!gPicker) {
+			SKSE::log::info("no Choose Your Own Color page to join: neither Illuminated nor RELight offers one");
+			return;
+		}
+		gPickerKeys.assign(gRows.size(), {});
+		std::vector<FadePicker::Item> items;
+		for (std::size_t i = 0; i < gRows.size(); ++i) {
+			if (Anima::OnThePicker(gRows[i].kind) && !gRows[i].name.empty()) {
+				gPickerKeys[i] = Anima::PickerKey(gRows[i].name);
+				items.push_back({ gPickerKeys[i].c_str(), gRows[i].name.c_str() });
+			}
+		}
+		gPicker->addItems(items.data(), static_cast<std::uint32_t>(items.size()), "Creatures");
+		gPicker->listen(PickerChanged);
+		SKSE::log::info("{} creature(s) offered to {}'s Choose Your Own Color page", items.size(), gPickerOwner);
+	}
+
+	const char* PickerOwner() { return gPickerOwner; }
+
+	std::optional<std::array<float, 3>> PickedColor(std::size_t a_row)
+	{
+		const auto p = PickedFor(a_row);
+		return p && p->colored ? std::optional<std::array<float, 3>>(p->rgb) : std::nullopt;
+	}
+
 	bool RowShows(std::size_t a_row, const Anima::Settings& a_s)
 	{
-		return Anima::Shown(gRows[a_row], a_s) && !Anima::TakenByEyesMod(gRows[a_row].kind, gEyesMod);
+		if (!Anima::Shown(gRows[a_row], a_s) || Anima::TakenByEyesMod(gRows[a_row].kind, gEyesMod)) {
+			return false;
+		}
+		const auto p = PickedFor(a_row);
+		return !p || !p->off;
 	}
 
 	bool EyesModLoaded() { return gEyesMod; }

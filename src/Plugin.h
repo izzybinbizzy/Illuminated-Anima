@@ -59,8 +59,11 @@ namespace Plugin
 	// another mod's Light Placer file names a model of this row
 	[[nodiscard]] bool RowModelsLitByOthers(std::size_t a_row);
 	// main thread: another creature lighting mod lights this actor and its switch gives the creature back to it
-	[[nodiscard]] bool GivenToThem(RE::Actor* a_actor, const Anima::Settings& a_s);
-	// any thread once data load is done: the settings show this row, and no other mod has taken it over
+	[[nodiscard]] bool                                GivenToThem(RE::Actor* a_actor, const Anima::Settings& a_s);
+	void                                              OfferToPicker();                 // data load, after the creatures files: joins Illuminated's or RELight's Choose Your Own Color page, when there is one
+	[[nodiscard]] const char*                         PickerOwner();                   // whose page that is, nullptr for none
+	[[nodiscard]] std::optional<std::array<float, 3>> PickedColor(std::size_t a_row);  // main thread: the color the player picked for this row, none on Auto
+	// main thread: the settings show this row, no other mod has taken it over and the player has not switched it off on the page
 	[[nodiscard]] bool RowShows(std::size_t a_row, const Anima::Settings& a_s);
 	[[nodiscard]] bool EyesModLoaded();  // any thread once data load is done: JS Emissive Eyes handles the eyes
 	// main thread: every other mod's light on this actor put out or given back by the settings; a_root its stored body, nullptr when it has none yet

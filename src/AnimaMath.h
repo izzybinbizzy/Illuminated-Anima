@@ -41,6 +41,16 @@ namespace Anima
 	inline constexpr std::size_t                          kKinds = 5;
 	inline constexpr std::array<std::string_view, kKinds> kKindNames{ "glow", "spell", "burst", "eyes", "machines" };
 
+	// a creature row's line on Illuminated's or RELight's Choose Your Own Color page; a spell or burst row lights a record, not a creature
+	[[nodiscard]] constexpr bool OnThePicker(Kind a_kind) noexcept
+	{
+		return a_kind == Kind::kGlow || a_kind == Kind::kEyes || a_kind == Kind::kMachines;
+	}
+	[[nodiscard]] inline std::string PickerKey(std::string_view a_name)
+	{
+		return "Creature|" + std::string(a_name);
+	}
+
 	// JS Emissive Eyes takes over the eyes when it is installed: ours are off on every creature they light. Machines are not eyes
 	[[nodiscard]] constexpr bool TakenByEyesMod(Kind a_kind, bool a_eyesMod) noexcept
 	{

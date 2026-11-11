@@ -29,7 +29,7 @@
 //   Lighting.cpp        Community Shaders, ENB or Vanilla (Illuminated's automatic detection)
 //   Settings.cpp        the settings file, read at load and saved after each change
 //   Menu.cpp            the SKSE Menu Framework page        DevBench.cpp  DevBench's inspect and control (optional)
-//   LightKit.h, LightMath.h, Pulse.h, MenuStyle.h, Translation.h, RuntimeGuard.h, DevBenchGlue.h, SKSEMenuFramework.h,
+//   LightKit.h, LightMath.h, Pulse.h, MenuStyle.h, Translation.h, RuntimeGuard.h, DevBenchGlue.h, SKSEMenuFramework.h, FadePickerAPI.h,
 //                       DevBenchAPI.*: shared word for word with our other plugins (master: Tools\Shared Plugin Code)
 //   FloorLightFix.*, FloorLightMath.h, FloorLightChecks.h
 //                       the Floor Light Fix, shared the same way: a light the game takes out of the scene stops lighting the floor
@@ -49,6 +49,7 @@ namespace
 		const auto started = std::chrono::steady_clock::now();
 		ReadLighting();
 		ReadCreatures();
+		OfferToPicker();
 		ReadSpellRecords();
 		ApplySpellRecords(SettingsNow());
 		InstallLights();  // before the menu's steps: a throw in them leaves the creatures lit
