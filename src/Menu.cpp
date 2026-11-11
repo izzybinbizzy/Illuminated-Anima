@@ -187,7 +187,7 @@ namespace Plugin
 											  .c_str());
 						PopStyleColor();
 					} else {
-						MenuStyle::Note(Translation::Fill(T("Our light replaces {}'s on these creatures: {}."), Anima::kOtherMods[i].name, list).c_str());
+						MenuStyle::Note(Translation::Fill(T("Our light replaces the light of {} on these creatures: {}."), Anima::kOtherMods[i].name, list).c_str());
 					}
 				}
 				TextWrapped("%s", T("Where another creature lighting mod lights a creature, ours is the light you get and its light there is put "
