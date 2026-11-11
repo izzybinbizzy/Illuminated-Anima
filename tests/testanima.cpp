@@ -176,7 +176,7 @@ namespace
 	{
 		Anima::Settings d;
 		CHECK(d.on && !d.natural && d.brightness == 100 && d.reach == 100 && d.flicker && d.deathFade && d.surge);
-		CHECK(std::ranges::none_of(d.onTop, [](bool a_on) { return a_on; }));  // ours steps aside for every other mod by default
+		CHECK(std::ranges::none_of(d.theirs, [](bool a_on) { return a_on; }));  // ours is the default on every other mod's creatures
 		// the menu's steps of 5, inside the bounds: the slider and the settings file use the one snap
 		CHECK(Anima::SnapPercent(102, Anima::kReachMin, Anima::kReachMax) == 100 && Anima::SnapPercent(103, Anima::kReachMin, Anima::kReachMax) == 105);
 		CHECK(Anima::SnapPercent(0, Anima::kReachMin, Anima::kReachMax) == Anima::kReachMin);
@@ -197,7 +197,7 @@ namespace
 		s.brightness = 150;
 		s.reach = 75;
 		s.flicker = false;
-		s.onTop = { true, false, true, false };
+		s.theirs = { true, false, true, false };
 		std::ostringstream out;
 		Anima::WriteSettings(s, out);
 		std::istringstream in(out.str());
@@ -205,7 +205,7 @@ namespace
 		const auto         keys = Anima::ReadSettings(in, r);
 		CHECK(keys == 11 + Anima::kOthers);
 		CHECK(!r.on && !r.kinds[2] && r.kinds[1] && r.natural && r.brightness == 150 && r.reach == 75 && !r.flicker && r.deathFade);
-		CHECK(r.onTop[0] && !r.onTop[1] && r.onTop[2] && !r.onTop[3]);
+		CHECK(r.theirs[0] && !r.theirs[1] && r.theirs[2] && !r.theirs[3]);
 
 		std::istringstream odd("\xEF\xBB\xBF[Settings]\nBrightness=99999\nReach=abc\nUnknown=1\nLights = off\n; Reach=10\n");
 		Anima::Settings    o;
@@ -254,7 +254,7 @@ namespace
 	void AbilityLights()
 	{
 		const auto luminous = Anima::NamedPluginMod("luminousatronachs.esp");
-		CHECK(luminous && Anima::kOtherMods[*luminous].key == "OnTopLuminous");
+		CHECK(luminous && Anima::kOtherMods[*luminous].key == "TheirsLuminous");
 		if (!luminous) {
 			return;
 		}
@@ -285,9 +285,9 @@ namespace
 		const auto enhanced = Anima::NamedPluginMod("enhancedatronachs.esp");
 		const auto illuminated = Anima::NamedPluginMod("lm_astronach.esp");
 		const auto eyes = Anima::NamedPluginMod("js emissive eyes se - johnskyrim.esp");
-		CHECK(enhanced && Anima::kOtherMods[*enhanced].key == "OnTopEnhanced");
-		CHECK(illuminated && Anima::kOtherMods[*illuminated].key == "OnTopIlluminatedAtronachs");
-		CHECK(eyes && Anima::kOtherMods[*eyes].key == "OnTopJSEyes");
+		CHECK(enhanced && Anima::kOtherMods[*enhanced].key == "TheirsEnhanced");
+		CHECK(illuminated && Anima::kOtherMods[*illuminated].key == "TheirsIlluminatedAtronachs");
+		CHECK(eyes && Anima::kOtherMods[*eyes].key == "TheirsJSEyes");
 		if (enhanced && illuminated && eyes) {
 			Anima::Lighters withLights{};
 			withLights[*enhanced] = true;
@@ -309,14 +309,44 @@ namespace
 		CHECK(skins.size() == 1 && skins[0].skins.size() == 1 && skins[0].skins[0] == "0xA98~ccbgssse025-advdsgs.esm");
 
 		Anima::Settings s;
-		CHECK(!Anima::Aside(none, s));  // nobody lights it
-		CHECK(Anima::Aside(lit, s));    // ours steps aside by default
-		s.onTop[*luminous] = true;
-		CHECK(!Anima::Aside(lit, s));  // its switch puts ours on top
+		CHECK(!Anima::GivenBack(none, s));  // nobody lights it
+		CHECK(!Anima::GivenBack(lit, s));   // ours is the default
+		s.theirs[*luminous] = true;
+		CHECK(Anima::GivenBack(lit, s));  // its switch gives the creature back
+		CHECK(!Anima::GivenBack(none, s));
 		lit[Anima::kOtherUnnamed] = true;
-		CHECK(Anima::Aside(lit, s));  // a second mod lights it too and its switch is off: still aside
-		s.onTop[Anima::kOtherUnnamed] = true;
-		CHECK(!Anima::Aside(lit, s));
+		CHECK(Anima::GivenBack(lit, s));  // a second mod lights it too and its switch is off: still given to the first
+		s.theirs[*luminous] = false;
+		CHECK(!Anima::GivenBack(lit, s));
+
+		CHECK(Anima::TheirLightOut(true, false));    // ours shows, its switch off: put out
+		CHECK(!Anima::TheirLightOut(true, true));    // its switch on: its own
+		CHECK(!Anima::TheirLightOut(false, false));  // ours does not show there (ice, a kind off): theirs stays
+	}
+
+	// a Light Placer light's name and the word that hides it
+	void TheirLights()
+	{
+		CHECK(Anima::LightPlacerFile("LP_Light[iLluminousElementals\\Wisp|MagicLightWhite01]#0") == std::optional<std::string>("illuminouselementals\\wisp"));
+		CHECK(Anima::LightPlacerFile("LP_Light[Dareniis Creatures/AtronachArcane|L](3)#2") == std::optional<std::string>("dareniis creatures\\atronacharcane"));
+		CHECK(!Anima::LightPlacerFile("IlluminatedCreatureLightingNGLight"));
+		CHECK(!Anima::LightPlacerFile("LP_Node[x|1,2,3]#0"));
+		CHECK(!Anima::LightPlacerFile("LP_Light[no bar]"));
+		CHECK(!Anima::LightPlacerFile("LP_Light[|x]"));
+		CHECK(!Anima::LightPlacerFile(""));
+		CHECK(Anima::LightPlacerKey("Atronachs/Flame Atronach") == "atronachs\\flame atronach");
+
+		constexpr std::uint32_t flags = 0x00000042u;
+		const auto              out = Anima::CullWord(flags, true);
+		CHECK((out & Anima::kCullMask) != 0 && (out & Anima::kCullScript) != 0 && (out & 0xFFu) == 0x42u);
+		CHECK(Anima::CullWord(out, true) == out);       // out twice is out once
+		CHECK(Anima::CullWord(out, false) == flags);    // back exactly as it was
+		CHECK(Anima::CullWord(flags, false) == flags);  // nothing of ours to let go
+		const std::uint32_t scripted = flags | Anima::kCullScript;
+		CHECK(Anima::CullWord(scripted, true) == scripted);   // a script hid it by itself: no mark of ours
+		CHECK(Anima::CullWord(scripted, false) == scripted);  // and it stays hidden
+		const std::uint32_t conditions = flags | (1u << 24);  // hidden by its conditions too
+		CHECK(Anima::CullWord(Anima::CullWord(conditions, true), false) == conditions);
 	}
 
 	void OverTime()
@@ -434,6 +464,7 @@ int main()
 	Showing();
 	OtherMods();
 	AbilityLights();
+	TheirLights();
 	TheCap();
 	OverTime();
 	Keys();

@@ -121,7 +121,7 @@ namespace Plugin
 			{
 				const auto s = SettingsNow();
 				for (std::size_t i = 0; i < Anima::kOthers; ++i) {
-					if (!ReplacedBy(i).empty() && !s.onTop[i]) {
+					if (!AlsoLitBy(i).empty() && s.theirs[i]) {
 						PushStyleColor(ImGuiCol_Text, MenuStyle::kBad);
 						TextWrapped("%s", T("Warning: another mod's lights replace ours on some creatures - see Their Own Lights below."));
 						PopStyleColor();
@@ -161,32 +161,37 @@ namespace Plugin
 			const auto found = OthersFound();
 			if (std::ranges::any_of(found, [](bool a_b) { return a_b; })) {
 				Header(Icon::kBulb, T("Their Own Lights"));
-				// the warning: another mod's config replaces ours on these creatures (ours steps aside, theirs is never touched)
+				// a mod's switch on: the warning, its config replaces ours on these creatures. Off: ours replaces its light on them
 				const auto s = SettingsNow();
 				for (std::size_t i = 0; i < Anima::kOthers; ++i) {
-					const auto names = ReplacedBy(i);
-					if (names.empty() || s.onTop[i]) {
+					const auto names = AlsoLitBy(i);
+					if (names.empty()) {
 						continue;
 					}
 					std::string list;
 					for (std::size_t n = 0; n < names.size(); ++n) {
 						list += (n ? ", " : "") + names[n];
 					}
-					PushStyleColor(ImGuiCol_Text, MenuStyle::kBad);
-					TextWrapped("%s", Translation::Fill(T("Warning: {} is lighting these creatures instead of Illuminated - Creature Lighting NG: {}."),
-										  Anima::kOtherMods[i].name, list)
-										  .c_str());
-					PopStyleColor();
+					if (s.theirs[i]) {
+						PushStyleColor(ImGuiCol_Text, MenuStyle::kBad);
+						TextWrapped("%s", Translation::Fill(T("Warning: {} is lighting these creatures instead of Illuminated - Creature Lighting NG: {}."),
+											  Anima::kOtherMods[i].name, list)
+											  .c_str());
+						PopStyleColor();
+					} else {
+						MenuStyle::Note(Translation::Fill(T("Our light replaces {}'s on these creatures: {}."), Anima::kOtherMods[i].name, list).c_str());
+					}
 				}
-				TextWrapped("%s", T("Where another creature lighting mod lights a creature, our light and color step aside and its light stays "
-									"as it is. Tick a mod to put our light on its creatures too, on top of its own."));
+				TextWrapped("%s", T("Where another creature lighting mod lights a creature, ours is the light you get and its light there is put "
+									"out. Tick a mod to give its creatures back to its own light; ours goes off on them. Glowing eyes that are art "
+									"and not a light stay as they are."));
 				for (std::size_t i = 0; i < Anima::kOthers; ++i) {
 					if (!found[i]) {
 						continue;
 					}
-					bool v = s.onTop[i];
-					if (Switch(std::string(Anima::kOtherMods[i].name).c_str(), v, T("Ticked: our light on its creatures too, on top of its own."))) {
-						UpdateSettings([&](Anima::Settings& a_s) { a_s.onTop[i] = v; });
+					bool v = s.theirs[i];
+					if (Switch(std::string(Anima::kOtherMods[i].name).c_str(), v, T("Ticked: its creatures keep its own light, and ours goes off on them."))) {
+						UpdateSettings([&](Anima::Settings& a_s) { a_s.theirs[i] = v; });
 						Changed();
 					}
 				}

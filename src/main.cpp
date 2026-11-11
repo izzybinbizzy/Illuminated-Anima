@@ -9,8 +9,8 @@
 // Creatures glow in their own light - atronachs, wisps, spriggans, ice wraiths, ash spawn, chaurus, familiars and the creatures
 // of the mods its creatures files name - with lights made in memory, on Community Shaders (with or without Light Placer), ENB and
 // Vanilla, the lighting found by itself. No plugin file, nothing in the save; the settings live in its SKSE Menu Framework page.
-// Where another creature lighting mod's config lights a creature, ours steps aside and never touches its light; the menu warns
-// which mod replaces ours on which creatures, and each mod's switch puts our light back on top of its own.
+// Where another creature lighting mod's config lights a creature, ours is the light it gets and that mod's is put out; the menu says
+// which mod lights which creatures, and each mod's switch gives its creatures back to its own light and turns ours off on them.
 //
 // CREDITS: a light is made and registered the way ReLight by Truman does it (github.com/TrumanGIT/ReLight, GPL-3.0-or-later,
 // used with his permission): a master NiPointLight cloned for every use and handed to the shadow scene node. Light spots and

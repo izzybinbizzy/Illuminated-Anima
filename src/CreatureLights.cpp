@@ -8,10 +8,10 @@
 // light has a dimmer controller (the game's own class) playing keys we build once, so its flicker, its death fade and a cast's surge
 // run with no code of ours and end with the light. Which creatures are lit within the light cap is judged at those events, never
 // while she walks inside one cell.
-// Where another creature lighting mod lights a creature, ours steps aside and never touches its light (its menu switch puts ours
-// back on top). A mod's ability that carries a light can reach a creature at any time: the game's apply event says so, and what a
-// creature wears is read once when it loads. A loading screen takes our lights out of the scene's lists and nothing says so, so a
-// creature still lit when one ends has its lights made again.
+// Where another creature lighting mod lights a creature, ours is the light it gets and the other mod's is put out (its menu switch gives
+// the creature back and ours goes off there). A mod's ability that carries a light can reach a creature at any time: the game's apply
+// event says so, and what a creature wears is read once when it loads. A loading screen takes our lights out of the scene's lists and
+// nothing says so, so a creature still lit when one ends has its lights made again.
 //
 // CREDIT: a light is made and registered the way ReLight by Truman does it (github.com/TrumanGIT/ReLight, GPL-3.0-or-later,
 // used with his permission): LightKit.h CloneLight / Hang. The dimmer is the game's own; its addresses and how a light's fade is
@@ -32,6 +32,7 @@ namespace Plugin
 		// cost two clock reads per actor walked)
 		constexpr std::size_t kCostLoaded = 1;
 		constexpr std::size_t kCostPick = 2;
+		constexpr std::size_t kCostTheirs = 3;
 
 		using Clock = std::chrono::steady_clock;
 
@@ -249,17 +250,17 @@ namespace Plugin
 			return nullptr;
 		}
 
-		// the rows of this creature to light now: those the settings show, on remains only those that keep an ember, and none where
-		// another mod lights it (ours steps aside, unless that mod's switch puts ours on top)
+		// the rows of this creature to light now: those the settings show, on remains only those that keep an ember, and none where its
+		// switch has given it back to another mod
 		[[nodiscard]] std::vector<std::size_t> WantedRows(RE::Actor* a_actor, const Anima::Settings& a_s)
 		{
 			auto       rows = RowsOf(a_actor);
 			const bool dead = a_actor->IsDead();
 			std::erase_if(rows, [&](std::size_t a_i) {
 				const auto& row = Rows()[a_i];
-				return !Anima::Shown(row, a_s) || (dead && !row.ember) || RowStepsAside(a_i, a_s);
+				return !Anima::Shown(row, a_s) || (dead && !row.ember) || RowGivenToThem(a_i, a_s);
 			});
-			if (!rows.empty() && StepsAside(a_actor, a_s)) {
+			if (!rows.empty() && GivenToThem(a_actor, a_s)) {
 				rows.clear();
 			}
 			return rows;
@@ -384,7 +385,7 @@ namespace Plugin
 			std::vector<RE::Actor*>        actors;
 			std::vector<Anima::Candidate>  candidates;
 			std::unordered_set<RE::FormID> listed;
-			// each actor's rows are worked out once (review 2026-11-09: they were asked twice per candidate)
+			// each actor's rows are worked out once
 			const auto add = [&](RE::Actor* a_actor, const std::vector<std::size_t>& a_rows) {
 				const bool faint = std::ranges::all_of(a_rows, [](std::size_t a_i) { return Rows()[a_i].kind == Anima::Kind::kEyes; });
 				candidates.push_back({ a_actor->IsDead(), here.GetDistance(a_actor->GetPosition()), actors.size(), faint });
@@ -519,11 +520,87 @@ namespace Plugin
 			std::vector<RE::FormID>                        died;
 			std::vector<RE::FormID>                        cast;
 			std::vector<RE::FormID>                        calm;
+			std::vector<RE::FormID>                        art;            // an art object started on it: another mod's light may hang on that
 			std::vector<std::pair<RE::FormID, RE::FormID>> worn;           // id, the ability's effect that carries a light
 			bool                                           pick{ false };  // her cell changed, or a creature finished dying
 			std::atomic<bool>                              any{ false };
 		};
 		Noted gNoted;
+
+		// another mod's lights on a creature of ours come with no word of their own: Light Placer hangs them as the body's parts attach, a
+		// lit ability's light comes at the effect's first update. So a creature that just came, or wears something new, is looked at for a
+		// few frames and then left alone. Only a stored body is walked: a body still loading may be another thread's
+		constexpr int kLooksWaiting = 120;  // while its body is not stored yet, about two seconds
+		constexpr int kLooksStored = 12;    // once it is
+
+		struct Looking
+		{
+			int left{ kLooksWaiting };
+			int stored{ 0 };
+		};
+		std::unordered_map<RE::FormID, Looking> gLooking;  // main thread only
+		std::atomic<bool>                       gLookQueued{ false };
+
+		void LookAgainSoon();
+
+		void LookTheirs()
+		{
+			const LightKit::Cost::Scope cost(kCostTheirs, "creature events: their lights");
+			const auto                  s = SettingsNow();
+			std::erase_if(gLooking, [&](auto& a_entry) {
+				auto& look = a_entry.second;
+				auto* actor = RE::TESForm::LookupByID<RE::Actor>(a_entry.first);
+				if (!actor) {
+					return true;
+				}
+				auto* body = actor->Is3DLoaded() ? actor->Get3D() : nullptr;
+				TheirLights(actor, body, s);
+				look.stored += body ? 1 : 0;
+				return --look.left <= 0 || look.stored >= kLooksStored;
+			});
+			if (!gLooking.empty()) {
+				LookAgainSoon();
+			}
+		}
+
+		// one more look a frame later, by way of the UI's queue: a main-thread task queued from a main-thread task can run in the same pass
+		// over SKSE's queue
+		void LookAgainSoon()
+		{
+			if (gLookQueued.exchange(true)) {
+				return;
+			}
+			Guarded("their lights", []() {
+				if (auto* tasks = SKSE::GetTaskInterface()) {
+					tasks->AddUITask([]() {
+						gLookQueued = false;
+						static_cast<void>(Later("their lights", []() { LookTheirs(); }));
+					});
+				} else {
+					gLookQueued = false;
+				}
+			});
+		}
+
+		void LookAt(RE::FormID a_id)
+		{
+			gLooking.insert_or_assign(a_id, Looking{});
+		}
+
+		// every creature around her, after a load or a loading screen: those that came with it sent nothing of their own
+		void LookAtEveryone()
+		{
+			if (auto* lists = RE::ProcessLists::GetSingleton()) {
+				for (auto& handle : lists->highActorHandles) {
+					if (auto actor = handle.get(); actor && CouldLight(actor.get())) {
+						LookAt(actor->GetFormID());
+					}
+				}
+			}
+			if (!gLooking.empty() && !gLookQueued.load()) {
+				LookTheirs();
+			}
+		}
 
 		void Drain()
 		{
@@ -533,7 +610,7 @@ namespace Plugin
 			const LightKit::Cost::Scope                    cost(kCostSlot, "creature events");
 			const auto                                     s = SettingsNow();
 			std::vector<Loaded>                            loaded;
-			std::vector<RE::FormID>                        died, cast, calm;
+			std::vector<RE::FormID>                        died, cast, calm, art;
 			std::vector<std::pair<RE::FormID, RE::FormID>> worn;
 			bool                                           pick = false;
 			{
@@ -542,6 +619,7 @@ namespace Plugin
 				died.swap(gNoted.died);
 				cast.swap(gNoted.cast);
 				calm.swap(gNoted.calm);
+				art.swap(gNoted.art);
 				worn.swap(gNoted.worn);
 				pick = std::exchange(gNoted.pick, false);
 			}
@@ -554,6 +632,7 @@ namespace Plugin
 					if (!RowsOf(actor).empty()) {
 						ReadWornLights(actor);
 						arrivals.insert_or_assign(id, node);
+						LookAt(id);
 						pick = true;
 					} else if (gLit.contains(id)) {
 						// lit, but its new body is one no row names: the re-pick lets its lights go
@@ -562,6 +641,7 @@ namespace Plugin
 					continue;
 				}
 				arrivals.erase(id);
+				gLooking.erase(id);
 				if (const auto it = gLit.find(id); it != gLit.end()) {
 					Drop(it->second, LightKit::Scene());
 					gLit.erase(it);
@@ -570,11 +650,15 @@ namespace Plugin
 			}
 			loadedCost.reset();
 			for (const auto& [id, effect] : worn) {
-				// an actor no row can name has nothing of ours to step aside
+				// an actor no row can name has nothing of ours to replace it with
 				if (auto* actor = RE::TESForm::LookupByID<RE::Actor>(id); actor && !RowsOf(actor).empty()) {
 					NoteWornLight(actor, effect);
 					Consider(actor, s);
+					LookAt(id);
 				}
+			}
+			for (const auto id : art) {
+				LookAt(id);
 			}
 			for (const auto id : died) {
 				if (const auto it = gLit.find(id); it != gLit.end() && !it->second.dying) {
@@ -596,6 +680,9 @@ namespace Plugin
 				Pick(s, arrivals);
 			}
 			gLitCount = gLit.size();
+			if (!gLooking.empty() && !gLookQueued.load()) {
+				LookTheirs();
+			}
 		}
 
 		// one note; the first of a burst queues the one task that acts on them all
@@ -642,6 +729,27 @@ namespace Plugin
 					const auto id = a_this->GetFormID();
 					Note([id, on]() { gNoted.loaded.push_back({ id, on, {} }); });
 				}
+			}
+			static inline REL::Relocation<decltype(thunk)> func;
+		};
+
+		// an art object started on a character: Light Placer hung its lights on it in the original call, and a wisp's look is such an art
+		struct ArtInit
+		{
+			static bool thunk(RE::ModelReferenceEffect* a_this)
+			{
+				const bool started = func(a_this);
+				if (started) {
+					Guarded("art start", [a_this]() {
+						const auto target = a_this->target.get();
+						auto*      actor = target ? target->As<RE::Actor>() : nullptr;
+						if (actor && CouldLight(actor)) {
+							const auto id = actor->GetFormID();
+							Note([id]() { gNoted.art.push_back(id); });
+						}
+					});
+				}
+				return started;
 			}
 			static inline REL::Relocation<decltype(thunk)> func;
 		};
@@ -716,8 +824,13 @@ namespace Plugin
 				const std::string_view name(a_event->menuName.c_str());
 				if (a_event->opening && name == RE::MainMenu::MENU_NAME) {
 					static_cast<void>(Later("main menu", []() { DropAll(); }));
-				} else if (!a_event->opening && name == RE::LoadingMenu::MENU_NAME && !NothingLit()) {
-					static_cast<void>(Later("loading screen", []() { HangAgain(); }));
+				} else if (!a_event->opening && name == RE::LoadingMenu::MENU_NAME) {
+					static_cast<void>(Later("loading screen", []() {
+						if (!NothingLit()) {
+							HangAgain();
+						}
+						LookAtEveryone();
+					}));
 				}
 				return RE::BSEventNotifyControl::kContinue;
 			}
@@ -742,6 +855,10 @@ namespace Plugin
 		REL::Relocation<std::uintptr_t> vtbl{ RE::Character::VTABLE[0] };
 		Load3D::func = vtbl.write_vfunc(0x6A, Load3D::thunk);
 		Set3D::func = vtbl.write_vfunc(0x6C, Set3D::thunk);
+		// after Light Placer's own hook of this slot (its hooks go in at plugin load, ours at data load), so its lights are there; none with no file to answer
+		if (OthersLightBodies()) {
+			ArtInit::func = REL::Relocation<std::uintptr_t>(RE::ModelReferenceEffect::VTABLE[0]).write_vfunc(0x36, ArtInit::thunk);
+		}
 		SKSE::log::info("lights follow the game's events; their motion is the game's own dimmer controllers (light cap {})", Cap());
 	}
 
@@ -755,9 +872,11 @@ namespace Plugin
 			gNoted.died.clear();
 			gNoted.cast.clear();
 			gNoted.calm.clear();
+			gNoted.art.clear();
 			gNoted.worn.clear();
 			gNoted.pick = false;
 		}
+		gLooking.clear();
 		LightKit::Cost::Reset();
 	}
 
@@ -773,6 +892,7 @@ namespace Plugin
 				}
 			}
 			Pick(SettingsNow(), {});
+			LookAtEveryone();
 		}));
 	}
 
@@ -789,6 +909,16 @@ namespace Plugin
 		}
 		DropAll();
 		Pick(s, still);
+		// a switch or a slider: every creature's other lights follow at once, those Pick does not hold a light for too
+		if (auto* lists = RE::ProcessLists::GetSingleton()) {
+			for (const auto* handles : { &lists->highActorHandles, &lists->middleHighActorHandles }) {
+				for (auto& handle : *handles) {
+					if (auto actor = handle.get(); actor && actor->Is3DLoaded() && CouldLight(actor.get())) {
+						TheirLights(actor.get(), actor->Get3D(), s);
+					}
+				}
+			}
+		}
 	}
 
 	std::size_t LitCount() { return gLitCount.load(); }

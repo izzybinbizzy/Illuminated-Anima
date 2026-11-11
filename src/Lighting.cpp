@@ -8,7 +8,7 @@
 //                       draws it (the shared `LightKit::Isl::DrawnByShaders`: its add-on, or Light Limit Fix naming it): there a light's
 //                       reach comes from its fade and its cutoff; an older one without either draws every light linear, its radius
 //                       straight from the light, and Light Limit Fix still reads its first words, so a plain light carries its own
-//                       linear words there (CodeRabbit on Dynamic Wards #36, 2026-11-09)
+//                       linear words there
 //   ENB                 } the game's own lighting: a light reaches its radius, drawn plain
 //   Vanilla             }
 // Leftover ENB settings never make it ENB while Community Shaders runs (RELight 2.1's report, Illuminated's rule), and ENB's settings
