@@ -661,7 +661,7 @@ namespace Plugin
 
 		void PickerChanged()
 		{
-			static_cast<void>(Later("color picked", []() { ApplyNow(false); }));
+			static_cast<void>(Later("color picked", []() { ApplyNow(); }));
 		}
 	}
 
