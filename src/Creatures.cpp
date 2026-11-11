@@ -731,14 +731,17 @@ namespace Plugin
 			for (const auto i : rows) {
 				models.insert(models.end(), gRows[i].models.begin(), gRows[i].models.end());
 			}
-			RE::BSVisit::TraverseScenegraphLights(a_root, [&](RE::NiPointLight* a_light) {
-				const auto file = Anima::LightPlacerFile(a_light->name.c_str());
-				const auto it = file ? gClaimFiles.find(*file) : gClaimFiles.end();
-				if (it != gClaimFiles.end() && std::ranges::any_of(models, [&](const std::string& a_model) { return it->second.models.contains(a_model); })) {
-					SetPlacerLight(a_light, Anima::TheirLightOut(ours, a_s.theirs[it->second.mod]));
-				}
-				return RE::BSVisit::BSVisitControl::kContinue;
-			});
+			// a light is another mod's only when its file names a model this creature wears, and every model a file names is in gClaims
+			if (std::ranges::any_of(models, [](const std::string& a_model) { return gClaims.contains(a_model); })) {
+				RE::BSVisit::TraverseScenegraphLights(a_root, [&](RE::NiPointLight* a_light) {
+					const auto file = Anima::LightPlacerFile(a_light->name.c_str());
+					const auto it = file ? gClaimFiles.find(*file) : gClaimFiles.end();
+					if (it != gClaimFiles.end() && std::ranges::any_of(models, [&](const std::string& a_model) { return it->second.models.contains(a_model); })) {
+						SetPlacerLight(a_light, Anima::TheirLightOut(ours, a_s.theirs[it->second.mod]));
+					}
+					return RE::BSVisit::BSVisitControl::kContinue;
+				});
+			}
 		}
 		if (auto* target = gAbilityLights.empty() ? nullptr : a_actor->AsMagicTarget()) {
 			// a light whose effect has ended is held by us alone: let go before the walk

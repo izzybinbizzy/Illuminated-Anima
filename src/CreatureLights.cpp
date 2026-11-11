@@ -186,7 +186,10 @@ namespace Plugin
 		void Drop(Lit& a_lit, RE::ShadowSceneNode* a_scene)
 		{
 			for (auto& one : a_lit.lights) {
-				if (a_scene && one.bs) {
+				// by its NiLight, the engine's own removal: a light Open Shaders' Promote made a shadow caster stays when removed by its BSLight
+				if (a_scene && one.light) {
+					a_scene->RemoveLight(one.light.get());
+				} else if (a_scene && one.bs) {
 					a_scene->RemoveLight(one.bs);
 				}
 				if (one.light && one.light->parent) {

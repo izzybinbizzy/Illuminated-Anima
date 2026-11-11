@@ -101,9 +101,9 @@ namespace
 
 SKSEPluginLoad(const SKSE::LoadInterface* a_skse)
 {
-	// the trampoline holds the Floor Light Fix's two call hooks, the only ones of this plugin that need it
+	// the trampoline holds the Floor Light Fix's two call hooks, the only ones of this plugin that need it; none on VR, where it is not installed
 	SKSE::InitInfo info{};
-	info.trampoline = true;
+	info.trampoline = !REL::Module::IsVR();
 	info.trampolineSize = FloorLightFix::kTrampolineBytes;
 	SKSE::Init(a_skse, info);
 	// the wrong game: loaded but idle - a false here makes SKSE add its own "exit game?" box over the guard's

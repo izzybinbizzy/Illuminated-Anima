@@ -178,7 +178,7 @@ namespace Anima
 		return a_text;
 	}
 
-	// the numbers of a comma list, at most a_most of them; nullopt when one does not read as a number (nan and inf read, and clamp lets a nan through)
+	// the numbers of a comma list, at most a_most of them; nullopt when one does not read as a finite number (a nan would pass a clamp)
 	[[nodiscard]] inline std::optional<std::vector<float>> Numbers(std::string_view a_text, std::size_t a_most)
 	{
 		std::vector<float> out;
