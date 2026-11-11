@@ -67,7 +67,7 @@ namespace Plugin
 	[[nodiscard]] bool RowShows(std::size_t a_row, const Anima::Settings& a_s);
 	[[nodiscard]] bool EyesModLoaded();  // any thread once data load is done: JS Emissive Eyes handles the eyes
 	// main thread: every other mod's light on this actor put out or given back by the settings; a_root its stored body, nullptr when it has none yet
-	void               TheirLights(RE::Actor* a_actor, RE::NiAVObject* a_root, const Anima::Settings& a_s);
+	void               TheirLights(RE::Actor* a_actor, RE::NiAVObject* a_root, const Anima::Settings& a_s, bool a_oursHung);
 	[[nodiscard]] bool OthersLightBodies();  // any thread once data load is done: another mod's Light Placer file names a body or art model
 	// any thread once data load is done: does this magic effect belong to an ability that carries a light
 	[[nodiscard]] bool IsAbilityLight(RE::FormID a_effect);

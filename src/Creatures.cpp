@@ -483,6 +483,10 @@ namespace Plugin
 			std::vector<std::pair<RE::NiPointer<RE::NiPointLight>, std::size_t>> found;
 		};
 
+		// the ability lights we hid, by address only (compared, never read): only those are shown again, so a light the game or another
+		// mod hid stays hidden
+		std::unordered_set<const RE::NiPointLight*> gHidAbility;  // main thread only
+
 		// another mod's Light Placer light out, or back as it was: Light Placer's own word for it, so its conditions leave it alone meanwhile
 		void SetPlacerLight(RE::NiPointLight* a_light, bool a_out)
 		{
@@ -713,14 +717,15 @@ namespace Plugin
 
 	bool EyesModLoaded() { return gEyesMod; }
 
-	void TheirLights(RE::Actor* a_actor, RE::NiAVObject* a_root, const Anima::Settings& a_s)
+	void TheirLights(RE::Actor* a_actor, RE::NiAVObject* a_root, const Anima::Settings& a_s, bool a_oursHung)
 	{
 		const auto rows = RowsOf(a_actor);
 		if (rows.empty()) {
 			return;
 		}
-		// theirs goes out only where ours would show: an ice creature with that switch off keeps the other mod's light
-		const bool ours = std::ranges::any_of(rows, [&](std::size_t a_i) { return RowShows(a_i, a_s); });
+		// theirs goes out only where ours shows: an ice creature with that switch off, one past the cap and one whose lights failed keep
+		// the other mod's light
+		const bool ours = a_oursHung && std::ranges::any_of(rows, [&](std::size_t a_i) { return RowShows(a_i, a_s); });
 		if (a_root && !gClaimFiles.empty()) {
 			auto models = BodyModels(a_actor);
 			for (const auto i : rows) {
@@ -739,7 +744,15 @@ namespace Plugin
 			WornLightEffects worn;
 			target->VisitEffects(worn);
 			for (const auto& [light, mod] : worn.found) {
-				light->SetAppCulled(Anima::TheirLightOut(ours, a_s.theirs[mod]));
+				const RE::NiPointLight* key = light.get();
+				if (Anima::TheirLightOut(ours, a_s.theirs[mod])) {
+					if (gHidAbility.contains(key) || !light->GetAppCulled()) {
+						gHidAbility.insert(key);
+						light->SetAppCulled(true);
+					}
+				} else if (gHidAbility.erase(key) != 0) {
+					light->SetAppCulled(false);
+				}
 			}
 		}
 	}
@@ -767,7 +780,11 @@ namespace Plugin
 
 	bool IsAbilityLight(RE::FormID a_effect) { return gAbilityLights.contains(a_effect); }
 
-	void ForgetWornLights() { gWore.clear(); }
+	void ForgetWornLights()
+	{
+		gWore.clear();
+		gHidAbility.clear();
+	}
 
 	Anima::Lighters OthersFound()
 	{

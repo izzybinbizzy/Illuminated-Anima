@@ -354,12 +354,31 @@ namespace Plugin
 		// the characters whose 3D just came, each with the body a queued load handed over (none when the game has stored it)
 		using Arrivals = std::unordered_map<RE::FormID, RE::NiPointer<RE::NiAVObject>>;
 
+		void LookAt(RE::FormID a_id);
+
 		// the creatures lit within the cap, the living first, then the nearest; a creature whose body went or whose light has run out let
 		// go: at an event that can change them, never on a clock
 		void Pick(const Anima::Settings& a_s, const Arrivals& a_arrivals)
 		{
 			auto* scene = LightKit::Scene();
 			auto* player = RE::PlayerCharacter::GetSingleton();
+			// another mod's light follows ours: a creature that gains or loses our light is looked at again (TheirLights)
+			std::unordered_set<RE::FormID> before;
+			for (const auto& [id, lit] : gLit) {
+				before.insert(id);
+			}
+			const auto lookAtChanged = [&]() {
+				for (const auto id : before) {
+					if (!gLit.contains(id)) {
+						LookAt(id);
+					}
+				}
+				for (const auto& [id, lit] : gLit) {
+					if (!before.contains(id)) {
+						LookAt(id);
+					}
+				}
+			};
 			std::erase_if(gLit, [&](auto& a_entry) {
 				auto& lit = a_entry.second;
 				auto  actor = lit.actor.get();
@@ -376,6 +395,7 @@ namespace Plugin
 			});
 			auto* lists = RE::ProcessLists::GetSingleton();
 			if (!player || !lists) {
+				lookAtChanged();
 				return;
 			}
 			const auto here = player->GetPosition();
@@ -430,6 +450,7 @@ namespace Plugin
 				Consider(actors[i], a_s, body != a_arrivals.end() ? body->second.get() : nullptr);
 			}
 			gLitCount = gLit.size();
+			lookAtChanged();
 		}
 
 		// a loading screen ended: a light kept under a body through one is in none of the scene's lists and lights nothing, so each lit
@@ -553,7 +574,7 @@ namespace Plugin
 					return true;
 				}
 				auto* body = actor->Is3DLoaded() ? actor->Get3D() : nullptr;
-				TheirLights(actor, body, s);
+				TheirLights(actor, body, s, gLit.contains(a_entry.first));
 				look.stored += body ? 1 : 0;
 				return --look.left <= 0 || look.stored >= kLooksStored;
 			});
@@ -738,7 +759,7 @@ namespace Plugin
 			static bool thunk(RE::ModelReferenceEffect* a_this)
 			{
 				const bool started = func(a_this);
-				if (started) {
+				if (started && a_this) {
 					Guarded("art start", [a_this]() {
 						const auto target = a_this->target.get();
 						auto*      actor = target ? target->As<RE::Actor>() : nullptr;
@@ -913,7 +934,7 @@ namespace Plugin
 			for (const auto* handles : { &lists->highActorHandles, &lists->middleHighActorHandles }) {
 				for (auto& handle : *handles) {
 					if (auto actor = handle.get(); actor && actor->Is3DLoaded() && CouldLight(actor.get())) {
-						TheirLights(actor.get(), actor->Get3D(), s);
+						TheirLights(actor.get(), actor->Get3D(), s, gLit.contains(actor->GetFormID()));
 					}
 				}
 			}
