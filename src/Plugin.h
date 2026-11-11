@@ -60,8 +60,9 @@ namespace Plugin
 	[[nodiscard]] bool RowModelsLitByOthers(std::size_t a_row);
 	// main thread: another creature lighting mod lights this actor and its switch gives the creature back to it
 	[[nodiscard]] bool GivenToThem(RE::Actor* a_actor, const Anima::Settings& a_s);
-	// main thread: another mod's own switch has its look on this row (a game global it names is not 0) and its switch here gives the row to it
-	[[nodiscard]] bool RowGivenToThem(std::size_t a_row, const Anima::Settings& a_s);
+	// any thread once data load is done: the settings show this row, and no other mod has taken it over
+	[[nodiscard]] bool RowShows(std::size_t a_row, const Anima::Settings& a_s);
+	[[nodiscard]] bool EyesModLoaded();  // any thread once data load is done: JS Emissive Eyes handles the eyes
 	// main thread: every other mod's light on this actor put out or given back by the settings; a_root its stored body, nullptr when it has none yet
 	void               TheirLights(RE::Actor* a_actor, RE::NiAVObject* a_root, const Anima::Settings& a_s);
 	[[nodiscard]] bool OthersLightBodies();  // any thread once data load is done: another mod's Light Placer file names a body or art model
@@ -83,10 +84,10 @@ namespace Plugin
 	[[nodiscard]] std::size_t SpellRecordCount();
 
 	// ------------------------------------------------------------------ CreatureLights.cpp: the lights
-	void                         InstallLights();  // data load: a character's two 3D slots and the game's events
-	void                         DropLights();     // a game loads, or a new one starts
-	void                         LookAround();     // main thread: light every creature already loaded (after a game loads)
-	void                         ApplyNow();       // main thread: the settings onto every creature now (the menu)
+	void                         InstallLights();                    // data load: a character's two 3D slots and the game's events
+	void                         DropLights();                       // a game loads, or a new one starts
+	void                         LookAround();                       // main thread: light every creature already loaded (after a game loads)
+	void                         ApplyNow(bool a_othersToo = true);  // main thread: the settings onto every creature now (the menu); false while a slider moves: whose light shows cannot change
 	[[nodiscard]] std::size_t    LitCount();
 	[[nodiscard]] nlohmann::json LitReport();          // main thread: every creature lit now and its lights (DevBench)
 	[[nodiscard]] std::uint32_t  LitAbilitiesNoted();  // how many applied abilities that carry a light the game's event announced (DevBench)

@@ -3,7 +3,7 @@
 // GPL-3.0-or-later; see LICENSE.txt and the notice at the top of main.cpp.
 //
 // The SKSE Menu Framework page - every setting this mod has (settings live in the SKSE menu only). One page: what was found,
-// the lights' switch, the four kinds, the one switch for elements that should not glow, Brightness, Reach, the three ways a
+// the lights' switch, the kinds, the one switch for elements that should not glow, Brightness, Reach, the three ways a
 // light moves, and Their Own Lights - one switch per other creature lighting mod that is installed. A change is saved and
 // applied on the game's main thread when it is let go.
 
@@ -73,7 +73,7 @@ namespace Plugin
 			static std::atomic<bool> queued{ false };
 			if (!queued.exchange(true) && !Later("menu slider", []() {
 					queued = false;
-					ApplyNow();
+					ApplyNow(false);
 				})) {
 				queued = false;
 			}
@@ -136,7 +136,8 @@ namespace Plugin
 				{ TR_MARK("Creatures' own glow"), TR_MARK("Atronachs, wisps, spriggans, ice wraiths and the other glowing creatures.") },
 				{ TR_MARK("Spells creatures use"), TR_MARK("Breaths, casting glow, swarms and the attacks creatures throw.") },
 				{ TR_MARK("Explosions and deaths"), TR_MARK("The exploding spiders and their bombs, and a creature's own death burst.") },
-				{ TR_MARK("Glowing eyes and machines"), TR_MARK("Undead and death hound eyes, and the dwarven spiders, spheres, ballistas and centurions.") },
+				{ TR_MARK("Glowing eyes"), TR_MARK("A faint glow at the eyes of the undead and of death hounds.") },
+				{ TR_MARK("Machines"), TR_MARK("The dwarven spiders, spheres, ballistas and centurions.") },
 			} };
 			for (std::size_t i = 0; i < Anima::kKinds; ++i) {
 				bool v = SettingsNow().kinds[i];
@@ -144,6 +145,9 @@ namespace Plugin
 					UpdateSettings([&](Anima::Settings& a_s) { a_s.kinds[i] = v; });
 					Changed();
 				}
+			}
+			if (EyesModLoaded()) {
+				MenuStyle::Note(T("JS Emissive Eyes handles the eyes while it is installed, so our glowing eyes stay off."));
 			}
 			Field(T("Ice, wind, water and stone creatures"), &Anima::Settings::natural,
 				T("Creatures made of an element that would not really give off light (frost atronachs, ice wraiths, wind, water and stone "
@@ -183,8 +187,7 @@ namespace Plugin
 					}
 				}
 				TextWrapped("%s", T("Where another creature lighting mod lights a creature, ours is the light you get and its light there is put "
-									"out. Tick a mod to give its creatures back to its own light; ours goes off on them. Glowing eyes that are art "
-									"and not a light stay as they are."));
+									"out. Tick a mod to give its creatures back to its own light; ours goes off on them."));
 				for (std::size_t i = 0; i < Anima::kOthers; ++i) {
 					if (!found[i]) {
 						continue;

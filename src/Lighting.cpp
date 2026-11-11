@@ -11,7 +11,7 @@
 //                       linear words there
 //   ENB                 } the game's own lighting: a light reaches its radius, drawn plain
 //   Vanilla             }
-// Leftover ENB settings never make it ENB while Community Shaders runs (RELight 2.1's report, Illuminated's rule), and ENB's settings
+// Leftover ENB settings never make it ENB while Community Shaders runs, and ENB's settings
 // files alone do not make it ENB: an ENB preset left in the game folder with no ENB running is Vanilla lighting. Only when the
 // loaded modules cannot be listed do the settings files decide (and the log says so).
 

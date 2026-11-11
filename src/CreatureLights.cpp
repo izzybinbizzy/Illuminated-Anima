@@ -257,8 +257,7 @@ namespace Plugin
 			auto       rows = RowsOf(a_actor);
 			const bool dead = a_actor->IsDead();
 			std::erase_if(rows, [&](std::size_t a_i) {
-				const auto& row = Rows()[a_i];
-				return !Anima::Shown(row, a_s) || (dead && !row.ember) || RowGivenToThem(a_i, a_s);
+				return !RowShows(a_i, a_s) || (dead && !Rows()[a_i].ember);
 			});
 			if (!rows.empty() && GivenToThem(a_actor, a_s)) {
 				rows.clear();
@@ -387,7 +386,7 @@ namespace Plugin
 			std::unordered_set<RE::FormID> listed;
 			// each actor's rows are worked out once
 			const auto add = [&](RE::Actor* a_actor, const std::vector<std::size_t>& a_rows) {
-				const bool faint = std::ranges::all_of(a_rows, [](std::size_t a_i) { return Rows()[a_i].kind == Anima::Kind::kEyes; });
+				const bool faint = std::ranges::all_of(a_rows, [](std::size_t a_i) { return Rows()[a_i].kind == Anima::Kind::kEyes || Rows()[a_i].kind == Anima::Kind::kMachines; });
 				candidates.push_back({ a_actor->IsDead(), here.GetDistance(a_actor->GetPosition()), actors.size(), faint });
 				actors.push_back(a_actor);
 				listed.insert(a_actor->GetFormID());
@@ -896,7 +895,7 @@ namespace Plugin
 		}));
 	}
 
-	void ApplyNow()
+	void ApplyNow(bool a_othersToo)
 	{
 		const auto s = SettingsNow();
 		ApplySpellRecords(s);
@@ -909,8 +908,8 @@ namespace Plugin
 		}
 		DropAll();
 		Pick(s, still);
-		// a switch or a slider: every creature's other lights follow at once, those Pick does not hold a light for too
-		if (auto* lists = RE::ProcessLists::GetSingleton()) {
+		// a switch: every creature's other lights follow at once, those Pick does not hold a light for too
+		if (auto* lists = a_othersToo ? RE::ProcessLists::GetSingleton() : nullptr) {
 			for (const auto* handles : { &lists->highActorHandles, &lists->middleHighActorHandles }) {
 				for (auto& handle : *handles) {
 					if (auto actor = handle.get(); actor && actor->Is3DLoaded() && CouldLight(actor.get())) {

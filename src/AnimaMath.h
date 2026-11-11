@@ -29,16 +29,23 @@ namespace Anima
 	using LightKit::SameText;
 	using Rgb = std::array<int, 3>;
 
-	// the four kinds the menu switches, each optional
+	// the kinds the menu switches, each optional
 	enum class Kind : std::uint8_t
 	{
-		kGlow,   // the creature's own glow
-		kSpell,  // the spells, breaths and attacks a creature uses
-		kBurst,  // explosions and deaths
-		kEyes,   // glowing eyes and machines
+		kGlow,      // the creature's own glow
+		kSpell,     // the spells, breaths and attacks a creature uses
+		kBurst,     // explosions and deaths
+		kEyes,      // glowing eyes
+		kMachines,  // the dwarven machines
 	};
-	inline constexpr std::size_t                          kKinds = 4;
-	inline constexpr std::array<std::string_view, kKinds> kKindNames{ "glow", "spell", "burst", "eyes" };
+	inline constexpr std::size_t                          kKinds = 5;
+	inline constexpr std::array<std::string_view, kKinds> kKindNames{ "glow", "spell", "burst", "eyes", "machines" };
+
+	// JS Emissive Eyes takes over the eyes when it is installed: ours are off on every creature they light. Machines are not eyes
+	[[nodiscard]] constexpr bool TakenByEyesMod(Kind a_kind, bool a_eyesMod) noexcept
+	{
+		return a_eyesMod && a_kind == Kind::kEyes;
+	}
 
 	// what a creature's light is made of: it picks the breath of its flicker, and whether it sits under the one switch for
 	// elements that should not really glow (wind, ice, water, stone - OFF by default)
@@ -119,7 +126,6 @@ namespace Anima
 		float                    strength{ 1.0f };
 		bool                     ember{ false };  // a small light stays on its remains after the death fade
 		std::vector<std::string> records;         // a spell or burst row: the game records it lights, "0x<id>~<plugin>"
-		std::vector<std::string> asideIf;         // game globals, "0x<id>~<plugin>": while one is not 0 another mod shows its own look here
 		float                    size{ 2.0f };    // an inverse-square light's size (Community Shaders)
 		std::vector<std::string> skins;           // skin records, "0x<id>~<plugin>": two looks of one body model told apart by the skin worn
 	};
@@ -242,8 +248,6 @@ namespace Anima
 				}
 			} else if (key == "record") {
 				a_row.records.emplace_back(a_value);
-			} else if (key == "asideif") {
-				a_row.asideIf.emplace_back(a_value);
 			} else if (key == "skin") {
 				a_row.skins.emplace_back(a_value);
 			} else if (key == "size") {
@@ -327,14 +331,13 @@ namespace Anima
 	};
 	// the last entry takes every other mod that lights one of our creatures (Magic Creatures of Radiance and any mod not named here):
 	// a mod we do not know has a switch too, and the menu names its Light Placer folder or its plugin file
-	inline constexpr std::array<OtherMod, 8> kOtherMods{ {
+	inline constexpr std::array<OtherMod, 7> kOtherMods{ {
 		{ "TheirsEmissive", "Emissive series (iamzachhunter)", "", "", "" },
 		{ "TheirsElementals", "iLluminous Elementals", "illuminouselementals", "", "" },
 		{ "TheirsDarenii", "Darenii's Spells - Creatures - CS Lights Addon", "dareniis creatures", "", "" },
 		{ "TheirsLuminous", "Luminous Atronachs (Raxyx7)", "", "", "luminousatronachs" },
 		{ "TheirsEnhanced", "Enhanced Atronachs (Raxyx7)", "", "", "enhancedatronachs" },
 		{ "TheirsIlluminatedAtronachs", "Illuminated Atronachs (Nehluxhes and Le_Magicien)", "", "", "lm_astronach" },
-		{ "TheirsJSEyes", "JS Emissive Eyes (johnskyrim)", "", "", "js emissive eyes se - johnskyrim" },
 		{ "TheirsOther", "Other mods", "", "", "" },
 	} };
 	inline constexpr std::size_t             kOthers = kOtherMods.size();
@@ -501,7 +504,7 @@ namespace Anima
 	struct Settings
 	{
 		bool                      on{ true };
-		std::array<bool, kKinds>  kinds{ true, true, true, true };
+		std::array<bool, kKinds>  kinds{ true, true, true, true, true };
 		bool                      natural{ false };
 		int                       brightness{ 100 };
 		int                       reach{ 100 };

@@ -203,7 +203,7 @@ namespace
 		std::istringstream in(out.str());
 		Anima::Settings    r;
 		const auto         keys = Anima::ReadSettings(in, r);
-		CHECK(keys == 11 + Anima::kOthers);
+		CHECK(keys == 12 + Anima::kOthers);
 		CHECK(!r.on && !r.kinds[2] && r.kinds[1] && r.natural && r.brightness == 150 && r.reach == 75 && !r.flicker && r.deathFade);
 		CHECK(r.theirs[0] && !r.theirs[1] && r.theirs[2] && !r.theirs[3]);
 
@@ -284,23 +284,17 @@ namespace
 		// the same route in the other two: each plugin named by its own file, its download without lights claiming nothing
 		const auto enhanced = Anima::NamedPluginMod("enhancedatronachs.esp");
 		const auto illuminated = Anima::NamedPluginMod("lm_astronach.esp");
-		const auto eyes = Anima::NamedPluginMod("js emissive eyes se - johnskyrim.esp");
 		CHECK(enhanced && Anima::kOtherMods[*enhanced].key == "TheirsEnhanced");
 		CHECK(illuminated && Anima::kOtherMods[*illuminated].key == "TheirsIlluminatedAtronachs");
-		CHECK(eyes && Anima::kOtherMods[*eyes].key == "TheirsJSEyes");
-		if (enhanced && illuminated && eyes) {
+		CHECK(!Anima::NamedPluginMod("js emissive eyes se - johnskyrim.esp"));  // it takes over the eyes: no switch, no entry
+		if (enhanced && illuminated) {
 			Anima::Lighters withLights{};
 			withLights[*enhanced] = true;
 			const std::vector<std::string> effect{ "skyrim.esm", "enhancedatronachs.esp" };
 			CHECK(Anima::AbilityClaim(false, effect, withLights) == enhanced);
 			CHECK(!Anima::AbilityClaim(false, effect, none));
 			CHECK(!Anima::AbilityClaim(false, std::vector<std::string>{ "skyrim.esm", "lm_astronach.esp" }, withLights));  // not that mod's light
-			CHECK(!Anima::AbilityClaim(false, std::vector<std::string>{ "js emissive eyes se - johnskyrim.esp" }, none));  // eyes are art, no light
 		}
-		std::istringstream aside("[creature]\nrace=X\nasideif=0x807~JS Emissive Eyes SE - Johnskyrim.esp\nasideif=0x808~JS Emissive Eyes SE - Johnskyrim.esp\n");
-		std::size_t        s5 = 0;
-		const auto         asides = Anima::ReadCreatures(aside, s5);
-		CHECK(asides.size() == 1 && asides[0].asideIf.size() == 2 && asides[0].asideIf[1] == "0x808~JS Emissive Eyes SE - Johnskyrim.esp");
 		// a row named only by the skin it wears (two looks of one body model) is a creature, not a block left out
 		std::istringstream byskin("[creature]\nname=Elytra\nskin=0xA98~ccbgssse025-advdsgs.esm\ncolor=255,149,51\n");
 		std::size_t        s6 = 0;
@@ -322,6 +316,38 @@ namespace
 		CHECK(Anima::TheirLightOut(true, false));    // ours shows, its switch off: put out
 		CHECK(!Anima::TheirLightOut(true, true));    // its switch on: its own
 		CHECK(!Anima::TheirLightOut(false, false));  // ours does not show there (ice, a kind off): theirs stays
+	}
+
+	// glowing eyes and machines are two switches, and JS Emissive Eyes takes only the eyes
+	void EyesAndMachines()
+	{
+		std::istringstream in("[creature]\nrace=A\nkind=eyes\n[creature]\nrace=B\nkind=machines\n");
+		std::size_t        skipped = 0;
+		const auto         rows = Anima::ReadCreatures(in, skipped);
+		CHECK(rows.size() == 2 && skipped == 0);
+		if (rows.size() != 2) {
+			return;
+		}
+		CHECK(rows[0].kind == Anima::Kind::kEyes && rows[1].kind == Anima::Kind::kMachines);
+		Anima::Settings s;
+		CHECK(Anima::Shown(rows[0], s) && Anima::Shown(rows[1], s));  // both on by default
+		s.kinds[static_cast<std::size_t>(Anima::Kind::kMachines)] = false;
+		CHECK(Anima::Shown(rows[0], s) && !Anima::Shown(rows[1], s));
+		s = {};
+		s.kinds[static_cast<std::size_t>(Anima::Kind::kEyes)] = false;
+		CHECK(!Anima::Shown(rows[0], s) && Anima::Shown(rows[1], s));
+
+		std::ostringstream out;
+		Anima::WriteSettings(s, out);
+		std::istringstream back(out.str());
+		Anima::Settings    r;
+		Anima::ReadSettings(back, r);
+		CHECK(!r.kinds[static_cast<std::size_t>(Anima::Kind::kEyes)] && r.kinds[static_cast<std::size_t>(Anima::Kind::kMachines)]);
+
+		CHECK(Anima::TakenByEyesMod(Anima::Kind::kEyes, true));
+		CHECK(!Anima::TakenByEyesMod(Anima::Kind::kMachines, true));  // its dwarven glow does not turn our machine lights off
+		CHECK(!Anima::TakenByEyesMod(Anima::Kind::kGlow, true));
+		CHECK(!Anima::TakenByEyesMod(Anima::Kind::kEyes, false));
 	}
 
 	// a Light Placer light's name and the word that hides it
@@ -465,6 +491,7 @@ int main()
 	OtherMods();
 	AbilityLights();
 	TheirLights();
+	EyesAndMachines();
 	TheCap();
 	OverTime();
 	Keys();
