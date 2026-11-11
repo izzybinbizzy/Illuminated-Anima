@@ -483,9 +483,9 @@ namespace Plugin
 			std::vector<std::pair<RE::NiPointer<RE::NiPointLight>, std::size_t>> found;
 		};
 
-		// the ability lights we hid, by address only (compared, never read): only those are shown again, so a light the game or another
-		// mod hid stays hidden
-		std::unordered_set<const RE::NiPointLight*> gHidAbility;  // main thread only
+		// the ability lights we hid: only those are shown again, so a light the game or another mod hid stays hidden. Held by reference,
+		// so a freed light never leaves its address to another one; let go once we are their last holder
+		std::vector<RE::NiPointer<RE::NiPointLight>> gHidAbility;  // main thread only
 
 		// another mod's Light Placer light out, or back as it was: Light Placer's own word for it, so its conditions leave it alone meanwhile
 		void SetPlacerLight(RE::NiPointLight* a_light, bool a_out)
@@ -741,16 +741,21 @@ namespace Plugin
 			});
 		}
 		if (auto* target = gAbilityLights.empty() ? nullptr : a_actor->AsMagicTarget()) {
+			// a light whose effect has ended is held by us alone: let go before the walk
+			std::erase_if(gHidAbility, [](const RE::NiPointer<RE::NiPointLight>& a_held) { return !a_held || a_held->GetRefCount() <= 1; });
 			WornLightEffects worn;
 			target->VisitEffects(worn);
 			for (const auto& [light, mod] : worn.found) {
-				const RE::NiPointLight* key = light.get();
+				const auto held = std::ranges::find_if(gHidAbility, [&](const RE::NiPointer<RE::NiPointLight>& a_held) { return a_held.get() == light.get(); });
 				if (Anima::TheirLightOut(ours, a_s.theirs[mod])) {
-					if (gHidAbility.contains(key) || !light->GetAppCulled()) {
-						gHidAbility.insert(key);
+					if (held != gHidAbility.end() || !light->GetAppCulled()) {
+						if (held == gHidAbility.end()) {
+							gHidAbility.push_back(light);
+						}
 						light->SetAppCulled(true);
 					}
-				} else if (gHidAbility.erase(key) != 0) {
+				} else if (held != gHidAbility.end()) {
+					gHidAbility.erase(held);
 					light->SetAppCulled(false);
 				}
 			}
