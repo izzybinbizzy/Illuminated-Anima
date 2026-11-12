@@ -18,7 +18,10 @@ reviews:
         SKSE plugin for Skyrim SE / AE (and a VR build) on CommonLibSSE-NG that gives creatures lights of their own. It
         hooks Character's Load3D and Set3D slots and sinks the game's events; lights are made in memory and hung on the
         creature's bones. Check that nothing runs on a timer or every frame, that every pointer from the game is
-        null-checked, that a hook cannot throw, and that another mod's light is never changed.
+        null-checked, that a hook cannot throw, and that another mod's light is changed only where ours replaces it by design
+        (hidden with Light Placer's own script bit, our mark beside it and its culled flag set as Light Placer's own cull does, or a
+        lit ability's light culled) and is given back
+        whole when its switch is on or our light lets go - never removed, freed or rewritten otherwise.
     - path: "tests/**"
       instructions: >-
         Off-game tests of the game-free code in src/AnimaMath.h. Check that every case is meaningful and that the run

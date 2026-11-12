@@ -3,7 +3,7 @@
 // GPL-3.0-or-later; see LICENSE.txt and the notice at the top of main.cpp.
 //
 // The SKSE Menu Framework page - every setting this mod has (settings live in the SKSE menu only). One page: what was found,
-// the lights' switch, the four kinds, the one switch for elements that should not glow, Brightness, Reach, the three ways a
+// the lights' switch, the kinds, the one switch for elements that should not glow, Brightness, Reach, the three ways a
 // light moves, and Their Own Lights - one switch per other creature lighting mod that is installed. A change is saved and
 // applied on the game's main thread when it is let go.
 
@@ -73,7 +73,7 @@ namespace Plugin
 			static std::atomic<bool> queued{ false };
 			if (!queued.exchange(true) && !Later("menu slider", []() {
 					queued = false;
-					ApplyNow();
+					ApplyNow(false);
 				})) {
 				queued = false;
 			}
@@ -121,7 +121,7 @@ namespace Plugin
 			{
 				const auto s = SettingsNow();
 				for (std::size_t i = 0; i < Anima::kOthers; ++i) {
-					if (!ReplacedBy(i).empty() && !s.onTop[i]) {
+					if (!AlsoLitBy(i).empty() && s.theirs[i]) {
 						PushStyleColor(ImGuiCol_Text, MenuStyle::kBad);
 						TextWrapped("%s", T("Warning: another mod's lights replace ours on some creatures - see Their Own Lights below."));
 						PopStyleColor();
@@ -136,7 +136,8 @@ namespace Plugin
 				{ TR_MARK("Creatures' own glow"), TR_MARK("Atronachs, wisps, spriggans, ice wraiths and the other glowing creatures.") },
 				{ TR_MARK("Spells creatures use"), TR_MARK("Breaths, casting glow, swarms and the attacks creatures throw.") },
 				{ TR_MARK("Explosions and deaths"), TR_MARK("The exploding spiders and their bombs, and a creature's own death burst.") },
-				{ TR_MARK("Glowing eyes and machines"), TR_MARK("Undead and death hound eyes, and the dwarven spiders, spheres, ballistas and centurions.") },
+				{ TR_MARK("Glowing eyes"), TR_MARK("A faint glow at the eyes of the undead and of death hounds.") },
+				{ TR_MARK("Machines"), TR_MARK("The dwarven spiders, spheres, ballistas and centurions.") },
 			} };
 			for (std::size_t i = 0; i < Anima::kKinds; ++i) {
 				bool v = SettingsNow().kinds[i];
@@ -144,6 +145,9 @@ namespace Plugin
 					UpdateSettings([&](Anima::Settings& a_s) { a_s.kinds[i] = v; });
 					Changed();
 				}
+			}
+			if (EyesModLoaded()) {
+				MenuStyle::Note(T("JS Emissive Eyes handles the eyes while it is installed, so our glowing eyes stay off."));
 			}
 			Field(T("Ice, wind, water and stone creatures"), &Anima::Settings::natural,
 				T("Creatures made of an element that would not really give off light (frost atronachs, ice wraiths, wind, water and stone "
@@ -153,6 +157,10 @@ namespace Plugin
 			Percent(T("Brightness"), &Anima::Settings::brightness, Anima::kBrightnessMin, Anima::kBrightnessMax, T("How bright every creature's light is."));
 			Percent(T("Reach"), &Anima::Settings::reach, Anima::kReachMin, Anima::kReachMax, T("How far every creature's light reaches."));
 
+			if (const char* owner = PickerOwner()) {
+				MenuStyle::Note(Translation::Fill(T("Pick a color per creature on {}'s Choose Your Own Color page."), owner).c_str());
+			}
+
 			Header(Icon::kBulb, T("Movement"));
 			Field(T("Flicker and pulse"), &Anima::Settings::flicker, T("Flame creatures flicker, storm creatures crackle, wisps and spirits breathe."));
 			Field(T("Fade on death"), &Anima::Settings::deathFade, T("A dying creature's light fades over a few seconds; a flame creature's remains keep a small ember."));
@@ -161,32 +169,36 @@ namespace Plugin
 			const auto found = OthersFound();
 			if (std::ranges::any_of(found, [](bool a_b) { return a_b; })) {
 				Header(Icon::kBulb, T("Their Own Lights"));
-				// the warning: another mod's config replaces ours on these creatures (ours steps aside, theirs is never touched)
+				// a mod's switch on: the warning, its config replaces ours on these creatures. Off: ours replaces its light on them
 				const auto s = SettingsNow();
 				for (std::size_t i = 0; i < Anima::kOthers; ++i) {
-					const auto names = ReplacedBy(i);
-					if (names.empty() || s.onTop[i]) {
+					const auto names = AlsoLitBy(i);
+					if (names.empty()) {
 						continue;
 					}
 					std::string list;
 					for (std::size_t n = 0; n < names.size(); ++n) {
 						list += (n ? ", " : "") + names[n];
 					}
-					PushStyleColor(ImGuiCol_Text, MenuStyle::kBad);
-					TextWrapped("%s", Translation::Fill(T("Warning: {} is lighting these creatures instead of Illuminated - Creature Lighting NG: {}."),
-										  Anima::kOtherMods[i].name, list)
-										  .c_str());
-					PopStyleColor();
+					if (s.theirs[i]) {
+						PushStyleColor(ImGuiCol_Text, MenuStyle::kBad);
+						TextWrapped("%s", Translation::Fill(T("Warning: {} is lighting these creatures instead of Illuminated - Creature Lighting NG: {}."),
+											  Anima::kOtherMods[i].name, list)
+											  .c_str());
+						PopStyleColor();
+					} else {
+						MenuStyle::Note(Translation::Fill(T("Our light replaces the light of {} on these creatures: {}."), Anima::kOtherMods[i].name, list).c_str());
+					}
 				}
-				TextWrapped("%s", T("Where another creature lighting mod lights a creature, our light and color step aside and its light stays "
-									"as it is. Tick a mod to put our light on its creatures too, on top of its own."));
+				TextWrapped("%s", T("Where another creature lighting mod lights a creature, ours is the light you get and its light there is put "
+									"out. Tick a mod to give its creatures back to its own light; ours goes off on them."));
 				for (std::size_t i = 0; i < Anima::kOthers; ++i) {
 					if (!found[i]) {
 						continue;
 					}
-					bool v = s.onTop[i];
-					if (Switch(std::string(Anima::kOtherMods[i].name).c_str(), v, T("Ticked: our light on its creatures too, on top of its own."))) {
-						UpdateSettings([&](Anima::Settings& a_s) { a_s.onTop[i] = v; });
+					bool v = s.theirs[i];
+					if (Switch(std::string(Anima::kOtherMods[i].name).c_str(), v, T("Ticked: its creatures keep its own light, and ours goes off on them."))) {
+						UpdateSettings([&](Anima::Settings& a_s) { a_s.theirs[i] = v; });
 						Changed();
 					}
 				}

@@ -4,11 +4,15 @@
 //
 // The creatures files (Data\SKSE\Plugins\IlluminatedCreatureLightingNG\Creatures\*.txt, read in name order; every row that names a creature
 // lights it), the races and body models they name, and what the other creature lighting mods light: their Light Placer files and
-// their abilities that carry a light - all read once at data load. A creature is found by its race first, then by a model its body
-// wears (the skin's armor addons), so a body replacer that keeps the race keeps the light. An ability can reach a creature no record
+// their abilities that carry a light - all read once at data load. A creature is found by a model its body wears (the skin's armor
+// addons), else by its race, so a body replacer that keeps the race keeps the light. An ability can reach a creature no record
 // shows (a mod's script adds it): the game's events say so, and what a creature wears is read off it when it loads, never on a timer.
 
 #include "Plugin.h"
+
+#include "FadePickerAPI.h"
+
+#include <bit>
 
 namespace Plugin
 {
@@ -24,9 +28,16 @@ namespace Plugin
 		std::unordered_map<const RE::TESObjectARMO*, std::vector<RE::TESRace*>> gSkinRaces;    // every skin -> the races that wear it
 		std::unordered_map<std::string, Anima::Lighters>                        gClaims;       // a body model other mods' Light Placer files light -> every one of those mods
 		std::unordered_map<std::string, std::string>                            gClaimFolder;  // the same model -> the Light Placer folder of a mod we do not name
-		Anima::Lighters                                                         gFound{};
-		std::size_t                                                             gFiles{ 0 };
-		// gFound and the warning's lists: written on the main thread (a creature met in play adds to them), read by the menu's render thread
+		// a Light Placer file, told by a light's own name: the mod it belongs to and the models it names
+		struct ClaimFile
+		{
+			std::size_t                     mod{ Anima::kOtherUnnamed };
+			std::unordered_set<std::string> models;
+		};
+		std::unordered_map<std::string, ClaimFile> gClaimFiles;
+		Anima::Lighters                            gFound{};
+		std::size_t                                gFiles{ 0 };
+		// gFound and the menu's lists: written on the main thread (a creature met in play adds to them), read by the menu's render thread
 		std::mutex gOthersLock;
 
 		// an addon the game puts on a race: a skin may also list another race's addon (vanilla dwarven skins carry the draugr body's)
@@ -42,6 +53,16 @@ namespace Plugin
 			std::string out(u8.size(), '\0');
 			std::ranges::transform(u8, out.begin(), [](char8_t c) { return static_cast<char>(c); });
 			return out;
+		}
+
+		// a path as Light Placer writes it into a light's name: in the local code page. A name the code page cannot hold would stop its own read
+		[[nodiscard]] std::string AsLightPlacerNames(const std::filesystem::path& a_path)
+		{
+			try {
+				return a_path.string();
+			} catch (const std::exception&) {
+				return Utf8(a_path);
+			}
 		}
 
 		void ReadFiles()
@@ -73,7 +94,7 @@ namespace Plugin
 		void IndexRows()
 		{
 			// the spell and burst rows light game records (SpellLights.cpp), never a creature's body
-			const auto onBody = [](const Anima::Row& a_r) { return a_r.kind == Anima::Kind::kGlow || a_r.kind == Anima::Kind::kEyes; };
+			const auto onBody = [](const Anima::Row& a_r) { return a_r.kind == Anima::Kind::kGlow || a_r.kind == Anima::Kind::kEyes || a_r.kind == Anima::Kind::kMachines; };
 			for (std::size_t i = 0; i < gRows.size(); ++i) {
 				if (!onBody(gRows[i])) {
 					continue;
@@ -156,7 +177,8 @@ namespace Plugin
 			using enum std::filesystem::directory_options;
 			for (std::filesystem::recursive_directory_iterator it(root, skip_permission_denied, ec), end; !ec && it != end; it.increment(ec)) {
 				std::error_code one;
-				if (!it->is_regular_file(one) || Lower(Utf8(it->path().extension())) != ".json") {
+				// exactly as Light Placer takes a file: a ".JSON" it never reads lights nothing
+				if (!it->is_regular_file(one) || it->path().extension() != ".json") {
 					continue;
 				}
 				const auto rel = it->path().lexically_relative(root);
@@ -171,6 +193,10 @@ namespace Plugin
 					continue;
 				}
 				++files;
+				auto stem = rel;
+				stem.replace_extension();
+				auto& claimFile = gClaimFiles[Anima::LightPlacerKey(AsLightPlacerNames(stem))];
+				claimFile.mod = *mod;
 				// a named mod is offered by its files alone; any other Light Placer file only once it lights one of our creatures
 				gFound[*mod] = gFound[*mod] || *mod != Anima::kOtherUnnamed;
 				for (const auto& entry : doc) {
@@ -184,6 +210,7 @@ namespace Plugin
 						}
 						const auto path = Anima::NormalPath(m.get<std::string>());
 						gClaims[path][*mod] = true;  // two mods on one model are both named, each with its own switch
+						claimFile.models.insert(path);
 						if (*mod == Anima::kOtherUnnamed) {
 							gClaimFolder.try_emplace(path, Utf8(*rel.begin()));
 						}
@@ -237,13 +264,13 @@ namespace Plugin
 
 	namespace
 	{
-		std::array<std::vector<std::string>, Anima::kOthers> gReplaced;  // per other mod: the names of our creatures its config lights
+		std::array<std::vector<std::string>, Anima::kOthers> gAlsoLit;  // per other mod: the names of our creatures its config lights
 
-		// which of our creatures each other mod's config lights instead of us: a row's own body models, and the models of every skin its races
-		// wear - a race's own and its NPCs' (for the menu's warning)
-		void FindReplaced()
+		// which of our creatures each other mod's config lights too: a row's own body models, and the models of every skin its races
+		// wear - a race's own and its NPCs' (for the menu's list)
+		void FindAlsoLit()
 		{
-			gReplaced = {};
+			gAlsoLit = {};
 			if (gClaims.empty()) {
 				return;
 			}
@@ -298,7 +325,7 @@ namespace Plugin
 						if (!it->second[mod]) {
 							continue;
 						}
-						auto& names = gReplaced[mod];
+						auto& names = gAlsoLit[mod];
 						// a mod we do not name is told by its Light Placer folder
 						const auto folder = gClaimFolder.find(model);
 						const auto name = mod == Anima::kOtherUnnamed && folder != gClaimFolder.end() ?
@@ -348,13 +375,13 @@ namespace Plugin
 			return a_spell && a_spell->GetSpellType() == RE::MagicSystem::SpellType::kAbility;
 		}
 
-		// one of our rows goes into the warning under the mod that lights it (a mod we do not name is told by its plugin file)
-		void AddReplaced(std::size_t a_mod, const Anima::Row& a_row, std::string_view a_file)
+		// one of our rows goes into the menu's list under the mod that lights it (a mod we do not name is told by its plugin file)
+		void AddAlsoLit(std::size_t a_mod, const Anima::Row& a_row, std::string_view a_file)
 		{
 			auto             name = a_mod == Anima::kOtherUnnamed ? std::format("{} ({})", a_row.name, a_file) : a_row.name;
 			std::scoped_lock l{ gOthersLock };
 			gFound[a_mod] = true;
-			if (auto& names = gReplaced[a_mod]; std::ranges::find(names, name) == names.end()) {
+			if (auto& names = gAlsoLit[a_mod]; std::ranges::find(names, name) == names.end()) {
 				names.push_back(std::move(name));
 			}
 		}
@@ -399,7 +426,7 @@ namespace Plugin
 						}
 						gRaceLights[race][*claim] = true;
 						for (const auto i : rows) {
-							AddReplaced(*claim, gRows[i], files.empty() ? std::string_view{} : std::string_view(files.front()));
+							AddAlsoLit(*claim, gRows[i], files.empty() ? std::string_view{} : std::string_view(files.front()));
 						}
 					}
 				}
@@ -407,37 +434,17 @@ namespace Plugin
 			SKSE::log::info("other creature lighting mods: {} abilit(ies) carry a light, {} race(s) lit by one", gAbilityLights.size(), gRaceLights.size());
 		}
 
-		// the rows that step aside while another mod's own switch is on: JS Emissive Eyes lights no light of its own, its eyes are art a
-		// script plays once its menu sets a global for that creature, so the global is the only word there is
-		struct RowGlobal
-		{
-			const RE::TESGlobal* global{ nullptr };
-			std::size_t          mod{ Anima::kOtherUnnamed };
-			std::string          file;
-			bool                 told{ false };  // main thread: it is in the warning
-		};
-		std::unordered_map<std::size_t, std::vector<RowGlobal>> gRowGlobals;
+		// JS Emissive Eyes loaded: it takes over the eyes, whatever its own menu says for a creature. Written at data load, read from any thread after
+		bool gEyesMod{ false };
 
-		void FindRowGlobals()
+		void FindEyesMod()
 		{
-			Anima::Lighters found{};
-			for (std::size_t i = 0; i < gRows.size(); ++i) {
-				for (const auto& key : gRows[i].asideIf) {
-					auto*      form = FormOfKey(key);
-					auto*      global = form ? form->As<RE::TESGlobal>() : nullptr;
-					const auto tilde = key.find('~');
-					if (!global || tilde == std::string::npos) {
-						continue;
-					}
-					auto       file = Lower(Anima::Trim(std::string_view(key).substr(tilde + 1)));
-					const auto mod = Anima::NamedPluginMod(file).value_or(Anima::kOtherUnnamed);
-					found[mod] = mod != Anima::kOtherUnnamed;
-					gRowGlobals[i].push_back({ global, mod, std::move(file), false });
-				}
-			}
-			std::scoped_lock l{ gOthersLock };
-			for (std::size_t m = 0; m < Anima::kOthers; ++m) {
-				gFound[m] = gFound[m] || found[m];
+			auto* dh = RE::TESDataHandler::GetSingleton();
+			gEyesMod = dh && std::ranges::any_of(std::array{ "JS Emissive Eyes SE - Johnskyrim.esp", "JS Emissive Eyes SE - Johnskyrim.esl" }, [&](const char* a_file) {
+				return dh->LookupLoadedModByName(a_file) || dh->LookupLoadedLightModByName(a_file);
+			});
+			if (gEyesMod) {
+				SKSE::log::info("JS Emissive Eyes is loaded: it handles the eyes, ours stay off");
 			}
 		}
 
@@ -458,14 +465,47 @@ namespace Plugin
 			std::vector<RE::FormID> found;
 		};
 
-		// this creature wears an ability that carries a light: it is marked, and our rows of it go into the warning once per effect and race
+		// a Light-archetype effect holds its light, and the game adds that light back to the scene at every update, so it is only ever hidden.
+		// Collected after the game's own walk of them, as WornLights is
+		class WornLightEffects final : public RE::MagicTarget::ForEachActiveEffectVisitor
+		{
+		public:
+			RE::BSContainer::ForEachResult Accept(RE::ActiveEffect* a_effect) override
+			{
+				auto*       effect = a_effect ? skyrim_cast<RE::LightEffect*>(a_effect) : nullptr;
+				const auto* base = effect && effect->light ? effect->GetBaseObject() : nullptr;
+				if (const auto it = base ? gAbilityLights.find(base->GetFormID()) : gAbilityLights.end(); it != gAbilityLights.end()) {
+					found.emplace_back(effect->light, it->second.mod);
+				}
+				return RE::BSContainer::ForEachResult::kContinue;
+			}
+
+			std::vector<std::pair<RE::NiPointer<RE::NiPointLight>, std::size_t>> found;
+		};
+
+		// the ability lights we hid: only those are shown again, so a light the game or another mod hid stays hidden. Held by reference,
+		// so a freed light never leaves its address to another one; let go once we are their last holder
+		std::vector<RE::NiPointer<RE::NiPointLight>> gHidAbility;  // main thread only
+
+		// another mod's Light Placer light out, or back as it was: Light Placer's own word for it, so its conditions leave it alone meanwhile
+		void SetPlacerLight(RE::NiPointLight* a_light, bool a_out)
+		{
+			auto&      word = a_light->GetLightRuntimeData().ambient.red;
+			const auto was = std::bit_cast<std::uint32_t>(word);
+			const auto now = Anima::CullWord(was, a_out);
+			word = std::bit_cast<float>(now);
+			// always, as Light Placer's own cull does: when it re-dresses a light it rewrites the word and leaves this flag as it was
+			a_light->SetAppCulled((now & Anima::kCullMask) != 0);
+		}
+
+		// this creature wears an ability that carries a light: it is marked, and our rows of it go into the menu's list once per effect and race
 		void MarkWorn(RE::Actor* a_actor, RE::FormID a_effect, const AbilityLight& a_light)
 		{
 			gWore[a_actor->GetFormID()][a_light.mod] = true;
 			const auto race = static_cast<std::uint64_t>(a_actor->GetRace() ? a_actor->GetRace()->GetFormID() : 0);
 			if (gNamed.insert((static_cast<std::uint64_t>(a_effect) << 32) | race).second) {
 				for (const auto i : RowsOf(a_actor)) {
-					AddReplaced(a_light.mod, gRows[i], a_light.file);
+					AddAlsoLit(a_light.mod, gRows[i], a_light.file);
 				}
 			}
 		}
@@ -505,29 +545,29 @@ namespace Plugin
 		gSkinRaces.clear();
 		gClaims.clear();
 		gClaimFolder.clear();
+		gClaimFiles.clear();
 		gAbilityLights.clear();
 		gRaceLights.clear();
-		gRowGlobals.clear();
 		gFound = {};
 		gFiles = 0;
 		ReadFiles();
 		IndexRows();
 		ReadClaims();
-		FindReplaced();
+		FindAlsoLit();
 		gSkinRaces.clear();
 		FindAbilityLights();
-		FindRowGlobals();
+		FindEyesMod();
 		for (std::size_t m = 0; m < Anima::kOthers; ++m) {
-			if (!gReplaced[m].empty()) {
-				SKSE::log::info("  {} lights {} of our creature(s) instead of us - ours steps aside there", Anima::kOtherMods[m].name, gReplaced[m].size());
+			if (!gAlsoLit[m].empty()) {
+				SKSE::log::info("  {} lights {} of our creature(s) too - ours replaces it there unless its switch gives them back", Anima::kOtherMods[m].name, gAlsoLit[m].size());
 			}
 		}
 	}
 
-	std::vector<std::string> ReplacedBy(std::size_t a_mod)
+	std::vector<std::string> AlsoLitBy(std::size_t a_mod)
 	{
 		std::scoped_lock l{ gOthersLock };
-		return a_mod < Anima::kOthers ? gReplaced[a_mod] : std::vector<std::string>{};
+		return a_mod < Anima::kOthers ? gAlsoLit[a_mod] : std::vector<std::string>{};
 	}
 
 	const std::vector<Anima::Row>& Rows()
@@ -568,60 +608,164 @@ namespace Plugin
 		return a_actor && (gByRace.contains(a_actor->GetRace()) || gRowSkins.contains(SkinOf(a_actor)));
 	}
 
-	bool RowModelsAside(std::size_t a_row, const Anima::Settings& a_s)
+	bool RowModelsLitByOthers(std::size_t a_row)
 	{
-		for (const auto& model : gRows[a_row].models) {
-			if (const auto it = gClaims.find(model); it != gClaims.end() && Anima::Aside(it->second, a_s)) {
-				return true;
-			}
-		}
-		return false;
+		return std::ranges::any_of(gRows[a_row].models, [](const std::string& a_model) { return gClaims.contains(a_model); });
 	}
 
-	bool StepsAside(RE::Actor* a_actor, const Anima::Settings& a_s)
+	bool GivenToThem(RE::Actor* a_actor, const Anima::Settings& a_s)
 	{
 		if (!a_actor) {
 			return false;
 		}
+		const auto claimed = [&](const std::string& a_model) {
+			const auto it = gClaims.find(a_model);
+			return it != gClaims.end() && Anima::GivenBack(it->second, a_s);
+		};
 		if (!gClaims.empty()) {
-			for (const auto& model : BodyModels(a_actor)) {
-				if (const auto it = gClaims.find(model); it != gClaims.end() && Anima::Aside(it->second, a_s)) {
-					return true;
-				}
+			if (std::ranges::any_of(BodyModels(a_actor), claimed)) {
+				return true;
 			}
 			// a row may name a model the creature wears beyond its skin: a wisp's look is an art object its ability attaches by script
 			for (const auto i : RowsOf(a_actor)) {
-				if (RowModelsAside(i, a_s)) {
+				if (std::ranges::any_of(gRows[i].models, claimed)) {
 					return true;
 				}
 			}
 		}
-		if (const auto it = gRaceLights.find(a_actor->GetRace()); it != gRaceLights.end() && Anima::Aside(it->second, a_s)) {
+		if (const auto it = gRaceLights.find(a_actor->GetRace()); it != gRaceLights.end() && Anima::GivenBack(it->second, a_s)) {
 			return true;
 		}
 		const auto worn = gWore.find(a_actor->GetFormID());
-		return worn != gWore.end() && Anima::Aside(worn->second, a_s);
+		return worn != gWore.end() && Anima::GivenBack(worn->second, a_s);
 	}
 
-	bool RowStepsAside(std::size_t a_row, const Anima::Settings& a_s)
+	namespace
 	{
-		const auto it = gRowGlobals.find(a_row);
-		if (it == gRowGlobals.end()) {
+		// Illuminated's or RELight's Choose Your Own Color page, when one is installed: main thread after data load
+		const FadePicker::API*   gPicker{ nullptr };
+		const char*              gPickerOwner{ nullptr };
+		std::vector<std::string> gPickerKeys;  // by row; empty for a row not on the page
+
+		struct Picked
+		{
+			bool                 off{ false };
+			bool                 colored{ false };
+			std::array<float, 3> rgb{};
+		};
+
+		[[nodiscard]] std::optional<Picked> PickedFor(std::size_t a_row)
+		{
+			if (!gPicker || a_row >= gPickerKeys.size() || gPickerKeys[a_row].empty()) {
+				return std::nullopt;
+			}
+			Picked p;
+			return gPicker->choiceFor(gPickerKeys[a_row].c_str(), p.rgb.data(), &p.off, &p.colored) ? std::optional<Picked>(p) : std::nullopt;
+		}
+
+		void PickerChanged()
+		{
+			static_cast<void>(Later("color picked", []() { ApplyNow(); }));
+		}
+	}
+
+	void OfferToPicker()
+	{
+		constexpr std::array<std::pair<const char*, const char*>, 2> providers{ { { "Illuminated.dll", "Illuminated" }, { "RELightSpellLightingNG.dll", "RELight" } } };
+		for (const auto& [dll, name] : providers) {
+			const auto handle = REX::W32::GetModuleHandleA(dll);
+			const auto request = handle ? reinterpret_cast<FadePicker::Request>(REX::W32::GetProcAddress(handle, FadePicker::kRequest)) : nullptr;
+			gPicker = request ? request(FadePicker::kVersion) : nullptr;
+			if (gPicker) {
+				gPickerOwner = name;
+				break;
+			}
+		}
+		if (!gPicker) {
+			SKSE::log::info("no Choose Your Own Color page to join: neither Illuminated nor RELight offers one");
+			return;
+		}
+		gPickerKeys.assign(gRows.size(), {});
+		std::vector<FadePicker::Item> items;
+		for (std::size_t i = 0; i < gRows.size(); ++i) {
+			if (Anima::OnThePicker(gRows[i].kind) && !gRows[i].name.empty()) {
+				gPickerKeys[i] = Anima::PickerKey(gRows[i].name);
+				items.push_back({ gPickerKeys[i].c_str(), gRows[i].name.c_str() });
+			}
+		}
+		gPicker->addItems(items.data(), static_cast<std::uint32_t>(items.size()), "Creatures");
+		gPicker->listen(PickerChanged);
+		SKSE::log::info("{} creature(s) offered to {}'s Choose Your Own Color page", items.size(), gPickerOwner);
+	}
+
+	const char* PickerOwner() { return gPickerOwner; }
+
+	std::optional<std::array<float, 3>> PickedColor(std::size_t a_row)
+	{
+		const auto p = PickedFor(a_row);
+		return p && p->colored ? std::optional<std::array<float, 3>>(p->rgb) : std::nullopt;
+	}
+
+	bool RowShows(std::size_t a_row, const Anima::Settings& a_s)
+	{
+		if (!Anima::Shown(gRows[a_row], a_s) || Anima::TakenByEyesMod(gRows[a_row].kind, gEyesMod)) {
 			return false;
 		}
-		bool aside = false;
-		for (auto& one : it->second) {
-			if (one.global->value == 0.0f) {
-				continue;
-			}
-			if (!one.told) {
-				AddReplaced(one.mod, gRows[a_row], one.file);
-				one.told = true;
-			}
-			aside = aside || !a_s.onTop[one.mod];
-		}
-		return aside;
+		const auto p = PickedFor(a_row);
+		return !p || !p->off;
 	}
+
+	bool EyesModLoaded() { return gEyesMod; }
+
+	void TheirLights(RE::Actor* a_actor, RE::NiAVObject* a_root, const Anima::Settings& a_s, bool a_oursHung)
+	{
+		const auto rows = RowsOf(a_actor);
+		if (rows.empty()) {
+			return;
+		}
+		// theirs goes out only where ours shows: an ice creature with that switch off, one past the cap and one whose lights failed keep
+		// the other mod's light
+		const bool ours = a_oursHung && std::ranges::any_of(rows, [&](std::size_t a_i) { return RowShows(a_i, a_s); });
+		if (a_root && !gClaimFiles.empty()) {
+			auto models = BodyModels(a_actor);
+			for (const auto i : rows) {
+				models.insert(models.end(), gRows[i].models.begin(), gRows[i].models.end());
+			}
+			// a light is another mod's only when its file names a model this creature wears, and every model a file names is in gClaims
+			if (std::ranges::any_of(models, [](const std::string& a_model) { return gClaims.contains(a_model); })) {
+				RE::BSVisit::TraverseScenegraphLights(a_root, [&](RE::NiPointLight* a_light) {
+					const auto file = Anima::LightPlacerFile(a_light->name.c_str());
+					const auto it = file ? gClaimFiles.find(*file) : gClaimFiles.end();
+					if (it != gClaimFiles.end() && std::ranges::any_of(models, [&](const std::string& a_model) { return it->second.models.contains(a_model); })) {
+						SetPlacerLight(a_light, Anima::TheirLightOut(ours, a_s.theirs[it->second.mod]));
+					}
+					return RE::BSVisit::BSVisitControl::kContinue;
+				});
+			}
+		}
+		if (auto* target = gAbilityLights.empty() ? nullptr : a_actor->AsMagicTarget()) {
+			// a light whose effect has ended is held by us alone: let go before the walk
+			std::erase_if(gHidAbility, [](const RE::NiPointer<RE::NiPointLight>& a_held) { return !a_held || a_held->GetRefCount() <= 1; });
+			WornLightEffects worn;
+			target->VisitEffects(worn);
+			for (const auto& [light, mod] : worn.found) {
+				const auto held = std::ranges::find_if(gHidAbility, [&](const RE::NiPointer<RE::NiPointLight>& a_held) { return a_held.get() == light.get(); });
+				if (Anima::TheirLightOut(ours, a_s.theirs[mod])) {
+					if (held != gHidAbility.end() || !light->GetAppCulled()) {
+						if (held == gHidAbility.end()) {
+							gHidAbility.push_back(light);
+						}
+						light->SetAppCulled(true);
+					}
+				} else if (held != gHidAbility.end()) {
+					gHidAbility.erase(held);
+					light->SetAppCulled(false);
+				}
+			}
+		}
+	}
+
+	bool OthersLightBodies() { return !gClaims.empty(); }
 
 	RE::TESForm* FormOfKey(std::string_view a_key)
 	{
@@ -644,7 +788,11 @@ namespace Plugin
 
 	bool IsAbilityLight(RE::FormID a_effect) { return gAbilityLights.contains(a_effect); }
 
-	void ForgetWornLights() { gWore.clear(); }
+	void ForgetWornLights()
+	{
+		gWore.clear();
+		gHidAbility.clear();
+	}
 
 	Anima::Lighters OthersFound()
 	{

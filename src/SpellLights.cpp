@@ -300,8 +300,8 @@ namespace Plugin
 		bool        anyCull = false;
 		for (std::size_t i = 0; i < gTargets.size(); ++i) {
 			auto& t = gTargets[i];
-			// another mod's Light Placer file on this art lights it instead: ours steps aside, as on a creature's body
-			const bool shown = t.row < rows.size() && Anima::Shown(rows[t.row], a_s) && !RowModelsAside(t.row, a_s);
+			// another mod's Light Placer file on this art lights it, and a projectile or explosion has no creature to put that light out on: ours stays off
+			const bool shown = t.row < rows.size() && Anima::Shown(rows[t.row], a_s) && !RowModelsLitByOthers(t.row);
 			if (t.inFiles) {
 				const bool cull = !shown && !t.shared;
 				gCull[i] = cull;

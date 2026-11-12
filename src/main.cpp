@@ -9,8 +9,8 @@
 // Creatures glow in their own light - atronachs, wisps, spriggans, ice wraiths, ash spawn, chaurus, familiars and the creatures
 // of the mods its creatures files name - with lights made in memory, on Community Shaders (with or without Light Placer), ENB and
 // Vanilla, the lighting found by itself. No plugin file, nothing in the save; the settings live in its SKSE Menu Framework page.
-// Where another creature lighting mod's config lights a creature, ours steps aside and never touches its light; the menu warns
-// which mod replaces ours on which creatures, and each mod's switch puts our light back on top of its own.
+// Where another creature lighting mod's config lights a creature, ours is the light it gets and that mod's is put out; the menu says
+// which mod lights which creatures, and each mod's switch gives its creatures back to its own light and turns ours off on them.
 //
 // CREDITS: a light is made and registered the way ReLight by Truman does it (github.com/TrumanGIT/ReLight, GPL-3.0-or-later,
 // used with his permission): a master NiPointLight cloned for every use and handed to the shadow scene node. Light spots and
@@ -29,7 +29,7 @@
 //   Lighting.cpp        Community Shaders, ENB or Vanilla (Illuminated's automatic detection)
 //   Settings.cpp        the settings file, read at load and saved after each change
 //   Menu.cpp            the SKSE Menu Framework page        DevBench.cpp  DevBench's inspect and control (optional)
-//   LightKit.h, LightMath.h, Pulse.h, MenuStyle.h, Translation.h, RuntimeGuard.h, DevBenchGlue.h, SKSEMenuFramework.h,
+//   LightKit.h, LightMath.h, Pulse.h, MenuStyle.h, Translation.h, RuntimeGuard.h, DevBenchGlue.h, SKSEMenuFramework.h, FadePickerAPI.h,
 //                       DevBenchAPI.*: shared word for word with our other plugins (master: Tools\Shared Plugin Code)
 //   FloorLightFix.*, FloorLightMath.h, FloorLightChecks.h
 //                       the Floor Light Fix, shared the same way: a light the game takes out of the scene stops lighting the floor
@@ -49,6 +49,7 @@ namespace
 		const auto started = std::chrono::steady_clock::now();
 		ReadLighting();
 		ReadCreatures();
+		OfferToPicker();
 		ReadSpellRecords();
 		ApplySpellRecords(SettingsNow());
 		InstallLights();  // before the menu's steps: a throw in them leaves the creatures lit
@@ -100,9 +101,9 @@ namespace
 
 SKSEPluginLoad(const SKSE::LoadInterface* a_skse)
 {
-	// the trampoline holds the Floor Light Fix's two call hooks, the only ones of this plugin that need it
+	// the trampoline holds the Floor Light Fix's two call hooks, the only ones of this plugin that need it; none on VR, where it is not installed
 	SKSE::InitInfo info{};
-	info.trampoline = true;
+	info.trampoline = !REL::Module::IsVR();
 	info.trampolineSize = FloorLightFix::kTrampolineBytes;
 	SKSE::Init(a_skse, info);
 	// the wrong game: loaded but idle - a false here makes SKSE add its own "exit game?" box over the guard's

@@ -50,27 +50,34 @@ namespace Plugin
 	// ------------------------------------------------------------------ Creatures.cpp: the creature files and who lights what
 	void                                         ReadCreatures();  // data load: every creatures file, the races and body models they name, the other mods' claims
 	[[nodiscard]] const std::vector<Anima::Row>& Rows();
-	// the rows that light this actor (its race's, else the rows of every model its body wears), empty for none
+	// the rows that light this actor (those of a model its body wears or its skin, else its race's), empty for none
 	[[nodiscard]] std::vector<std::size_t> RowsOf(RE::Actor* a_actor);
 	// any thread once data load is done: a row may name this character (its race, or a skin holding a row's model); two reads
 	[[nodiscard]] bool CouldLight(RE::Actor* a_actor);
 	// a record named "0x<id>~<plugin>"; nullptr when the plugin is not loaded or the text does not read
 	[[nodiscard]] RE::TESForm* FormOfKey(std::string_view a_key);
-	// another mod's Light Placer file names a model of this row and its switch does not put ours on top
-	[[nodiscard]] bool RowModelsAside(std::size_t a_row, const Anima::Settings& a_s);
-	// main thread: another creature lighting mod lights this actor and its switch does not put ours on top
-	[[nodiscard]] bool StepsAside(RE::Actor* a_actor, const Anima::Settings& a_s);
-	// main thread: another mod's own switch has its look on this row (a game global it names is not 0) and its switch does not put ours on top
-	[[nodiscard]] bool RowStepsAside(std::size_t a_row, const Anima::Settings& a_s);
+	// another mod's Light Placer file names a model of this row
+	[[nodiscard]] bool RowModelsLitByOthers(std::size_t a_row);
+	// main thread: another creature lighting mod lights this actor and its switch gives the creature back to it
+	[[nodiscard]] bool                                GivenToThem(RE::Actor* a_actor, const Anima::Settings& a_s);
+	void                                              OfferToPicker();                 // data load, after the creatures files: joins Illuminated's or RELight's Choose Your Own Color page, when there is one
+	[[nodiscard]] const char*                         PickerOwner();                   // whose page that is, nullptr for none
+	[[nodiscard]] std::optional<std::array<float, 3>> PickedColor(std::size_t a_row);  // main thread: the color the player picked for this row, none on Auto
+	// main thread: the settings show this row, no other mod has taken it over and the player has not switched it off on the page
+	[[nodiscard]] bool RowShows(std::size_t a_row, const Anima::Settings& a_s);
+	[[nodiscard]] bool EyesModLoaded();  // any thread once data load is done: JS Emissive Eyes handles the eyes
+	// main thread: every other mod's light on this actor put out or given back by the settings; a_root its stored body, nullptr when it has none yet
+	void               TheirLights(RE::Actor* a_actor, RE::NiAVObject* a_root, const Anima::Settings& a_s, bool a_oursHung);
+	[[nodiscard]] bool OthersLightBodies();  // any thread once data load is done: another mod's Light Placer file names a body or art model
 	// any thread once data load is done: does this magic effect belong to an ability that carries a light
 	[[nodiscard]] bool IsAbilityLight(RE::FormID a_effect);
 	void               NoteWornLight(RE::Actor* a_actor, RE::FormID a_effect);  // main thread: the game's apply event said such an effect reached it
 	void               ReadWornLights(RE::Actor* a_actor);                      // main thread: what it wears now, read when it loads
 	void               ForgetWornLights();                                      // a game loads, or a new one starts: the marks are the old game's
-	// which other mods are installed (the menu offers those) and, for each, the names of our creatures it lights instead of us (the
-	// menu's warning, empty for none). Any thread: a creature met in play can add a name.
+	// which other mods are installed (the menu offers those) and, for each, the names of our creatures it lights too (the menu's list,
+	// empty for none). Any thread: a creature met in play can add a name.
 	[[nodiscard]] Anima::Lighters          OthersFound();
-	[[nodiscard]] std::vector<std::string> ReplacedBy(std::size_t a_mod);
+	[[nodiscard]] std::vector<std::string> AlsoLitBy(std::size_t a_mod);
 	[[nodiscard]] std::size_t              CreatureRowCount();
 	[[nodiscard]] std::size_t              FilesRead();
 
@@ -80,10 +87,10 @@ namespace Plugin
 	[[nodiscard]] std::size_t SpellRecordCount();
 
 	// ------------------------------------------------------------------ CreatureLights.cpp: the lights
-	void                         InstallLights();  // data load: a character's two 3D slots and the game's events
-	void                         DropLights();     // a game loads, or a new one starts
-	void                         LookAround();     // main thread: light every creature already loaded (after a game loads)
-	void                         ApplyNow();       // main thread: the settings onto every creature now (the menu)
+	void                         InstallLights();                    // data load: a character's two 3D slots and the game's events
+	void                         DropLights();                       // a game loads, or a new one starts
+	void                         LookAround();                       // main thread: light every creature already loaded (after a game loads)
+	void                         ApplyNow(bool a_othersToo = true);  // main thread: the settings onto every creature now (the menu); false while a slider moves: whose light shows cannot change
 	[[nodiscard]] std::size_t    LitCount();
 	[[nodiscard]] nlohmann::json LitReport();          // main thread: every creature lit now and its lights (DevBench)
 	[[nodiscard]] std::uint32_t  LitAbilitiesNoted();  // how many applied abilities that carry a light the game's event announced (DevBench)

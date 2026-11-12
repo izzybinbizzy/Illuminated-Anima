@@ -29,16 +29,33 @@ namespace Anima
 	using LightKit::SameText;
 	using Rgb = std::array<int, 3>;
 
-	// the four kinds the menu switches, each optional
+	// the kinds the menu switches, each optional
 	enum class Kind : std::uint8_t
 	{
-		kGlow,   // the creature's own glow
-		kSpell,  // the spells, breaths and attacks a creature uses
-		kBurst,  // explosions and deaths
-		kEyes,   // glowing eyes and machines
+		kGlow,      // the creature's own glow
+		kSpell,     // the spells, breaths and attacks a creature uses
+		kBurst,     // explosions and deaths
+		kEyes,      // glowing eyes
+		kMachines,  // the dwarven machines
 	};
-	inline constexpr std::size_t                          kKinds = 4;
-	inline constexpr std::array<std::string_view, kKinds> kKindNames{ "glow", "spell", "burst", "eyes" };
+	inline constexpr std::size_t                          kKinds = 5;
+	inline constexpr std::array<std::string_view, kKinds> kKindNames{ "glow", "spell", "burst", "eyes", "machines" };
+
+	// a creature row's line on Illuminated's or RELight's Choose Your Own Color page; a spell or burst row lights a record, not a creature
+	[[nodiscard]] constexpr bool OnThePicker(Kind a_kind) noexcept
+	{
+		return a_kind == Kind::kGlow || a_kind == Kind::kEyes || a_kind == Kind::kMachines;
+	}
+	[[nodiscard]] inline std::string PickerKey(std::string_view a_name)
+	{
+		return "Creature|" + std::string(a_name);
+	}
+
+	// JS Emissive Eyes takes over the eyes when it is installed: ours are off on every creature they light. Machines are not eyes
+	[[nodiscard]] constexpr bool TakenByEyesMod(Kind a_kind, bool a_eyesMod) noexcept
+	{
+		return a_eyesMod && a_kind == Kind::kEyes;
+	}
 
 	// what a creature's light is made of: it picks the breath of its flicker, and whether it sits under the one switch for
 	// elements that should not really glow (wind, ice, water, stone - OFF by default)
@@ -119,7 +136,6 @@ namespace Anima
 		float                    strength{ 1.0f };
 		bool                     ember{ false };  // a small light stays on its remains after the death fade
 		std::vector<std::string> records;         // a spell or burst row: the game records it lights, "0x<id>~<plugin>"
-		std::vector<std::string> asideIf;         // game globals, "0x<id>~<plugin>": while one is not 0 another mod shows its own look here
 		float                    size{ 2.0f };    // an inverse-square light's size (Community Shaders)
 		std::vector<std::string> skins;           // skin records, "0x<id>~<plugin>": two looks of one body model told apart by the skin worn
 	};
@@ -162,7 +178,7 @@ namespace Anima
 		return a_text;
 	}
 
-	// the numbers of a comma list, at most a_most of them; nullopt when one does not read as a number (nan and inf read, and clamp lets a nan through)
+	// the numbers of a comma list, at most a_most of them; nullopt when one does not read as a finite number (a nan would pass a clamp)
 	[[nodiscard]] inline std::optional<std::vector<float>> Numbers(std::string_view a_text, std::size_t a_most)
 	{
 		std::vector<float> out;
@@ -242,8 +258,6 @@ namespace Anima
 				}
 			} else if (key == "record") {
 				a_row.records.emplace_back(a_value);
-			} else if (key == "asideif") {
-				a_row.asideIf.emplace_back(a_value);
 			} else if (key == "skin") {
 				a_row.skins.emplace_back(a_value);
 			} else if (key == "size") {
@@ -315,8 +329,8 @@ namespace Anima
 	}
 
 	// ------------------------------------------------------------------ the settings (written by the menu only)
-	// the other creature lighting mods: where one lights a creature, ours steps aside and theirs is never touched (the mod's
-	// CLAUDE.md 3); each has a switch, off by default, that puts our light back on its creatures on top of theirs
+	// the other creature lighting mods: where one lights a creature, ours is the light the player gets and its light there is put out;
+	// each has a switch, off by default, that gives its creatures back to its own light and turns ours off on them
 	struct OtherMod
 	{
 		std::string_view key;     // the settings key of its switch
@@ -326,24 +340,23 @@ namespace Anima
 		std::string_view plugin;  // its plugin file without the extension (lower case), when it lights through an ability; empty = none
 	};
 	// the last entry takes every other mod that lights one of our creatures (Magic Creatures of Radiance and any mod not named here):
-	// a mod we do not know still makes ours step aside, and the warning names its Light Placer folder or its plugin file
-	inline constexpr std::array<OtherMod, 8> kOtherMods{ {
-		{ "OnTopEmissive", "Emissive series (iamzachhunter)", "", "", "" },
-		{ "OnTopElementals", "iLluminous Elementals", "illuminouselementals", "", "" },
-		{ "OnTopDarenii", "Darenii's Spells - Creatures - CS Lights Addon", "dareniis creatures", "", "" },
-		{ "OnTopLuminous", "Luminous Atronachs (Raxyx7)", "", "", "luminousatronachs" },
-		{ "OnTopEnhanced", "Enhanced Atronachs (Raxyx7)", "", "", "enhancedatronachs" },
-		{ "OnTopIlluminatedAtronachs", "Illuminated Atronachs (Nehluxhes and Le_Magicien)", "", "", "lm_astronach" },
-		{ "OnTopJSEyes", "JS Emissive Eyes (johnskyrim)", "", "", "js emissive eyes se - johnskyrim" },
-		{ "OnTopOther", "Other mods", "", "", "" },
+	// a mod we do not know has a switch too, and the menu names its Light Placer folder or its plugin file
+	inline constexpr std::array<OtherMod, 7> kOtherMods{ {
+		{ "TheirsEmissive", "Emissive series (iamzachhunter)", "", "", "" },
+		{ "TheirsElementals", "iLluminous Elementals", "illuminouselementals", "", "" },
+		{ "TheirsDarenii", "Darenii's Spells - Creatures - CS Lights Addon", "dareniis creatures", "", "" },
+		{ "TheirsLuminous", "Luminous Atronachs (Raxyx7)", "", "", "luminousatronachs" },
+		{ "TheirsEnhanced", "Enhanced Atronachs (Raxyx7)", "", "", "enhancedatronachs" },
+		{ "TheirsIlluminatedAtronachs", "Illuminated Atronachs (Nehluxhes and Le_Magicien)", "", "", "lm_astronach" },
+		{ "TheirsOther", "Other mods", "", "", "" },
 	} };
 	inline constexpr std::size_t             kOthers = kOtherMods.size();
 	inline constexpr std::size_t             kOtherUnnamed = kOthers - 1;
 	using Lighters = std::array<bool, kOthers>;
 
 	// A mod whose Light Placer folders have plain names ("Atronachs", "Draugr") is known by the exact pair of folder and file name,
-	// so another mod's folder of the same name is not taken for it. The Emissive series, read off its 13 creature downloads
-	// (2026-11-09, the testing Mod Organizer): one folder per download, its files named after what they light.
+	// so another mod's folder of the same name is not taken for it. The Emissive series: one folder per creature download, its files
+	// named after what they light.
 	struct OtherFile
 	{
 		std::size_t      mod{};   // its entry in kOtherMods
@@ -351,7 +364,7 @@ namespace Anima
 		std::string_view stem;    // its file name without .json (lower case)
 	};
 	inline constexpr std::size_t kEmissive = 0;
-	static_assert(kOtherMods[kEmissive].key == "OnTopEmissive");
+	static_assert(kOtherMods[kEmissive].key == "TheirsEmissive");
 	inline constexpr std::array<OtherFile, 30> kOtherFiles{ {
 		{ kEmissive, "ash spawns", "ash spawns" },
 		{ kEmissive, "atronachs", "flame atronach" },
@@ -404,6 +417,44 @@ namespace Anima
 			}
 		}
 		return kOtherUnnamed;
+	}
+
+	// a Light Placer file as compared everywhere: its path under Data\LightPlacer without .json, lower case, backslashes
+	[[nodiscard]] inline std::string LightPlacerKey(std::string_view a_path)
+	{
+		auto key = Lower(a_path);
+		std::ranges::replace(key, '/', '\\');
+		return key;
+	}
+
+	// the file a Light Placer light came from, off the light's own name: LP_Light[<file>|<its light record>]... ; nullopt for any other light
+	[[nodiscard]] inline std::optional<std::string> LightPlacerFile(std::string_view a_name)
+	{
+		constexpr std::string_view lead = "LP_Light[";
+		if (!a_name.starts_with(lead)) {
+			return std::nullopt;
+		}
+		a_name.remove_prefix(lead.size());
+		const auto bar = a_name.find('|');
+		if (bar == std::string_view::npos || bar == 0) {
+			return std::nullopt;
+		}
+		return LightPlacerKey(a_name.substr(0, bar));
+	}
+
+	// Light Placer keeps why a light is hidden in the top byte of the light's first word, and stops judging its conditions while the
+	// script bit is set (its own TogglePlacedLight sets that bit). Ours sets it too, with a mark of its own beside it, so a light some
+	// script hid by itself stays hidden when ours lets go
+	inline constexpr std::uint32_t kCullMask = 0xFF000000u;
+	inline constexpr std::uint32_t kCullScript = 1u << 26;
+	inline constexpr std::uint32_t kCullOurs = 1u << 29;
+
+	[[nodiscard]] constexpr std::uint32_t CullWord(std::uint32_t a_word, bool a_out) noexcept
+	{
+		if (a_out) {
+			return (a_word & kCullScript) ? a_word : a_word | kCullScript | kCullOurs;
+		}
+		return (a_word & kCullOurs) ? a_word & ~(kCullScript | kCullOurs) : a_word;
 	}
 
 	// the named mod a plugin file belongs to, by its lower-case file name (the extension does not count: a light-flagged copy keeps its name)
@@ -463,14 +514,14 @@ namespace Anima
 	struct Settings
 	{
 		bool                      on{ true };
-		std::array<bool, kKinds>  kinds{ true, true, true, true };
+		std::array<bool, kKinds>  kinds{ true, true, true, true, true };
 		bool                      natural{ false };
 		int                       brightness{ 100 };
 		int                       reach{ 100 };
 		bool                      flicker{ true };
 		bool                      deathFade{ true };
 		bool                      surge{ true };
-		std::array<bool, kOthers> onTop{};  // our light on that mod's creatures too, on top of theirs
+		std::array<bool, kOthers> theirs{};  // that mod's creatures keep its own light, ours off on them
 	};
 
 	[[nodiscard]] inline bool ReadBool(std::string_view a_value, bool a_default)
@@ -521,7 +572,7 @@ namespace Anima
 			}
 			for (std::size_t i = 0; i < kOthers; ++i) {
 				if (SameText(a_key, kOtherMods[i].key)) {
-					a_s.onTop[i] = ReadBool(a_value, a_s.onTop[i]);
+					a_s.theirs[i] = ReadBool(a_value, a_s.theirs[i]);
 					return true;
 				}
 			}
@@ -559,7 +610,7 @@ namespace Anima
 		a_out << "DeathFade=" << (a_s.deathFade ? 1 : 0) << '\n';
 		a_out << "CastSurge=" << (a_s.surge ? 1 : 0) << '\n';
 		for (std::size_t i = 0; i < kOthers; ++i) {
-			a_out << kOtherMods[i].key << '=' << (a_s.onTop[i] ? 1 : 0) << '\n';
+			a_out << kOtherMods[i].key << '=' << (a_s.theirs[i] ? 1 : 0) << '\n';
 		}
 	}
 
@@ -569,15 +620,21 @@ namespace Anima
 		return a_s.on && a_s.kinds[static_cast<std::size_t>(a_row.kind)] && (a_s.natural || !Natural(a_row.element));
 	}
 
-	// does ours step aside for these mods: for any one of them whose switch does not put ours on top
-	[[nodiscard]] inline bool Aside(const Lighters& a_lighters, const Settings& a_s) noexcept
+	// is a creature these mods light given back to them: to any one of them whose switch is on
+	[[nodiscard]] inline bool GivenBack(const Lighters& a_lighters, const Settings& a_s) noexcept
 	{
 		for (std::size_t i = 0; i < kOthers; ++i) {
-			if (a_lighters[i] && !a_s.onTop[i]) {
+			if (a_lighters[i] && a_s.theirs[i]) {
 				return true;
 			}
 		}
 		return false;
+	}
+
+	// is one mod's light on a creature put out: only where ours would show there, and only while that mod's own switch is off
+	[[nodiscard]] constexpr bool TheirLightOut(bool a_oursShows, bool a_theirSwitch) noexcept
+	{
+		return a_oursShows && !a_theirSwitch;
 	}
 
 	// ------------------------------------------------------------------ the light over time
