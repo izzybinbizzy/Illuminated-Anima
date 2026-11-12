@@ -11,7 +11,7 @@ The plugin of Illuminated - Creature Lighting NG, an all-in-one lighting mod for
 - The spells creatures use and their explosions are lit through the game's own light records.
 - Finds the lighting by itself (Community Shaders with or without Light Placer, ENB, Vanilla) and makes each light for it.
 - Where another creature lighting mod lights a creature, ours replaces its light there by default: a Light Placer light is hidden
-  with Light Placer's own script bit and a lit ability's light is culled, never removed or rewritten otherwise. A switch per mod gives
+  with Light Placer's own script bit and culled flag, a lit ability's light is culled, never removed or rewritten otherwise. A switch per mod gives
   its creatures back to its own light and turns ours off on them; a creature past the nearest we light keeps the other mod's light.
 - It works from the game's events and a character's two 3D slots. A light's flicker, death fade and cast surge are keys the game's own
   dimmer controllers play, so no code of ours runs per frame.
