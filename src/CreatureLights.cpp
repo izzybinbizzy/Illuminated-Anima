@@ -67,6 +67,60 @@ namespace Plugin
 		// how many casting lights a creature left up as its 3D went were put out (the game check for his 580); main thread only
 		std::atomic<std::uint32_t> gCastLightsOut{ 0 };
 
+		// a light of ours on an art object a row names (a hit art, an enchantment's art: no light record to point), on the node the art
+		// attaches to, keyed by its effect's id - the effect itself is never kept (the plugin framework section 2); main thread only
+		struct ArtOne
+		{
+			std::uint32_t                   effect{ 0 };
+			RE::NiPointer<RE::NiPointLight> light;
+			RE::NiPointer<RE::BSLight>      bs;
+		};
+		std::vector<ArtOne> gArtLit;
+		// any thread: an art light is up or one is noted and not hung yet, so an art effect's end is noted; written under gNoted.lock
+		std::atomic<bool> gArtArmed{ false };
+		// the art-start hook also notes art on creatures for another mod's light (only when such a mod is installed)
+		bool gWatchTheirArt{ false };
+
+		// a light of ours on an impact's splash (an impact record names no light), under its particle's 3D, keyed by the particle and never read
+		// through the key. Hung by the particle's own update; its end (Detach, or a free with no Detach) hands the light to the main-thread task
+		struct ImpactOne
+		{
+			RE::NiPointer<RE::NiPointLight> light;
+			RE::NiPointer<RE::BSLight>      bs;
+		};
+		std::mutex                                 gImpactLock;
+		std::unordered_map<const void*, ImpactOne> gImpactLit;  // under gImpactLock; an empty entry = judged, nothing hung
+		std::atomic<std::size_t>                   gImpactCount{ 0 };
+		bool                                       gImpactRows{ false };
+		// the main thread, recorded at install (data load runs on it): a particle updated anywhere else has its light hung by the task
+		std::uint32_t              gMainThread{ 0 };
+		std::atomic<std::uint64_t> gImpactSeen{ 0 };        // particles the impact hook looked at while an impact row exists
+		std::atomic<RE::FormID>    gImpactLastRecord{ 0 };  // the impact record of the last one (0 = the particle held none)
+		std::mutex                 gImpactModelsLock;
+		std::vector<std::string>   gImpactModels;  // the newest model names of particles no row's impact record named (DevBench)
+
+		// what a splash that stayed dark really wore: devbench lists these names
+		void NoteImpactModel(std::string_view a_name)
+		{
+			std::scoped_lock l{ gImpactModelsLock };
+			if (std::ranges::find(gImpactModels, a_name) != gImpactModels.end()) {
+				return;
+			}
+			if (gImpactModels.size() >= 16) {
+				gImpactModels.erase(gImpactModels.begin());
+			}
+			gImpactModels.emplace_back(a_name);
+		}
+
+		void TakeImpact(ImpactOne& a_one, RE::ShadowSceneNode* a_scene)
+		{
+			LightKit::TakeOff(a_scene, a_one.bs);
+			if (a_one.light && a_one.light->parent) {
+				a_one.light->parent->DetachChild(a_one.light.get());
+			}
+			a_one = {};
+		}
+
 		// the light limit is Light Limit Fix's, linear or inverse square alike
 		[[nodiscard]] std::size_t Cap() { return LightLimitFix() ? kCapShaders : kCapPlain; }
 
@@ -197,6 +251,24 @@ namespace Plugin
 			a_lit = {};
 		}
 
+		void TakeArt(ArtOne& a_one, RE::ShadowSceneNode* a_scene)
+		{
+			LightKit::TakeOff(a_scene, a_one.bs);
+			if (a_one.light && a_one.light->parent) {
+				a_one.light->parent->DetachChild(a_one.light.get());
+			}
+			a_one = {};
+		}
+
+		void DropArt()
+		{
+			auto* scene = LightKit::Scene();
+			for (auto& one : gArtLit) {
+				TakeArt(one, scene);
+			}
+			gArtLit.clear();
+		}
+
 		void DropAll()
 		{
 			auto* scene = LightKit::Scene();
@@ -205,6 +277,13 @@ namespace Plugin
 			}
 			gLit.clear();
 			gLitCount = 0;
+			DropArt();
+			std::scoped_lock l{ gImpactLock };
+			for (auto& [particle, one] : gImpactLit) {
+				TakeImpact(one, scene);
+			}
+			gImpactLit.clear();
+			gImpactCount = 0;
 		}
 
 		// the light's fields from the strength and reach (Illuminated's way: inverse-square words on Community Shaders, else a plain
@@ -249,6 +328,111 @@ namespace Plugin
 				}
 			}
 			return nullptr;
+		}
+
+		// the art effects whose art a row names, each with the node its art attaches to: a_effects names which (empty with a_all: every one,
+		// after a load, a loading screen or a settings change). Read under the game's lock for its list, lit after it is let go
+		void LightArt(const std::vector<std::uint32_t>& a_effects, bool a_all)
+		{
+			auto* lists = RE::ProcessLists::GetSingleton();
+			auto* scene = LightKit::Scene();
+			if (!lists || !scene || !AnyArtRows()) {
+				return;
+			}
+			const auto s = SettingsNow();
+			struct Found
+			{
+				std::uint32_t                 effect{ 0 };
+				std::size_t                   row{ 0 };
+				RE::NiPointer<RE::NiAVObject> root;
+			};
+			std::vector<Found> found;
+			lists->ForEachModelEffect([&](RE::ModelReferenceEffect* a_effect) {
+				const auto row = a_effect->finished ? std::nullopt : ArtRow(a_effect->artObject);
+				const auto id = a_effect->effectID;
+				const bool wanted = a_all || std::ranges::find(a_effects, id) != a_effects.end();
+				if (row && wanted && RowShows(*row, s) && std::ranges::none_of(gArtLit, [id](const ArtOne& a_one) { return a_one.effect == id; })) {
+					found.push_back({ id, *row, RE::NiPointer<RE::NiAVObject>(a_effect->GetAttachRoot()) });
+				}
+				return RE::BSContainer::ForEachResult::kContinue;
+			});
+			for (const auto& [id, i, root] : found) {
+				auto* node = root ? root->AsNode() : nullptr;
+				auto* light = node ? LightKit::CloneLight() : nullptr;
+				if (!light) {
+					continue;
+				}
+				const auto& row = Rows()[i];
+				light->name = kName;
+				light->local.translate = { row.points.front().x, row.points.front().y, row.points.front().z };
+				light->GetLightRuntimeData().radius.x = -1.0f;  // the clone's own may equal ours: Dress attenuates it at once
+				Dress(light, row, row.strength * static_cast<float>(s.brightness) / 100.0f, s, std::nullopt);
+				RE::NiPointer<RE::BSLight> bs(LightKit::Hang(node, light, scene, 1.0f, true));
+				if (bs) {
+					gArtLit.push_back({ id, RE::NiPointer<RE::NiPointLight>(light), bs });
+				}
+			}
+		}
+
+		// any thread: the particle is judged once - an empty entry claims it, and its end (Detach, a free) clears the entry
+		[[nodiscard]] bool ClaimImpact(const void* a_particle)
+		{
+			std::scoped_lock l{ gImpactLock };
+			const bool       claimed = gImpactLit.try_emplace(a_particle).second;
+			gImpactCount = gImpactLit.size();
+			return claimed;
+		}
+
+		// main thread: one light of its row on a claimed particle still in the world; a particle that ended meanwhile (its entry cleared, or its
+		// copy no longer in the scene) gets none, and one that ends while the light is made has it taken off at once
+		void HangImpact(RE::BSTempEffectParticle* a_particle, std::size_t a_row)
+		{
+			{
+				std::scoped_lock l{ gImpactLock };
+				if (!gImpactLit.contains(a_particle)) {
+					return;
+				}
+			}
+			const auto s = SettingsNow();
+			auto*      object = a_particle->particleObject.get();
+			auto*      node = object && object->parent ? object->AsNode() : nullptr;
+			auto*      scene = LightKit::Scene();
+			ImpactOne  one;
+			auto*      light = node && scene && RowShows(a_row, s) ? LightKit::CloneLight() : nullptr;
+			if (light) {
+				const auto& row = Rows()[a_row];
+				light->name = kName;
+				light->local.translate = { row.points.front().x, row.points.front().y, row.points.front().z };
+				light->GetLightRuntimeData().radius.x = -1.0f;  // the clone's own may equal ours: Dress attenuates it at once
+				Dress(light, row, row.strength * static_cast<float>(s.brightness) / 100.0f, s, std::nullopt);
+				RE::NiPointer<RE::BSLight> bs(LightKit::Hang(node, light, scene, 1.0f, true));
+				if (bs) {
+					one = { RE::NiPointer<RE::NiPointLight>(light), bs };
+				}
+			}
+			if (!one.bs) {
+				return;
+			}
+			{
+				std::scoped_lock l{ gImpactLock };
+				if (const auto it = gImpactLit.find(a_particle); it != gImpactLit.end()) {
+					it->second = std::move(one);
+					return;
+				}
+			}
+			TakeImpact(one, scene);
+		}
+
+		void ArtGone(const std::vector<std::uint32_t>& a_effects)
+		{
+			auto* scene = LightKit::Scene();
+			std::erase_if(gArtLit, [&](ArtOne& a_one) {
+				if (std::ranges::find(a_effects, a_one.effect) == a_effects.end()) {
+					return false;
+				}
+				TakeArt(a_one, scene);
+				return true;
+			});
 		}
 
 		// the rows of this creature to light now: those the settings show, on remains only those that keep an ember, and none where its
@@ -540,19 +724,30 @@ namespace Plugin
 		// what the game's events noted for the main thread: a sink only writes a form id here (it may run on a job thread)
 		struct Noted
 		{
-			std::mutex                                     lock;
-			std::vector<Loaded>                            loaded;
-			std::vector<RE::FormID>                        died;
-			std::vector<RE::FormID>                        cast;
-			std::vector<RE::FormID>                        calm;
-			std::vector<RE::FormID>                        art;   // an art object started on it: another mod's light may hang on that
-			std::vector<std::pair<RE::FormID, RE::FormID>> worn;  // id, the ability's effect that carries a light
+			std::mutex                 lock;
+			std::vector<Loaded>        loaded;
+			std::vector<RE::FormID>    died;
+			std::vector<RE::FormID>    cast;
+			std::vector<RE::FormID>    calm;
+			std::vector<RE::FormID>    art;            // an art object started on it: another mod's light may hang on that
+			std::vector<std::uint32_t> artOn, artOff;  // art effects whose art a row names: started, ended (their ids)
+			std::vector<ImpactOne>     impactGone;     // an impact's light whose particle ended: taken off the scene here
+			// a claimed particle whose update ran off the main thread, held until its light is hung here
+			std::vector<std::pair<RE::NiPointer<RE::BSTempEffectParticle>, std::size_t>> impactHang;
+			std::vector<std::pair<RE::FormID, RE::FormID>>                               worn;  // id, the ability's effect that carries a light
 			// a casting light still up when its caster's 3D went: the game leaves it in the scene with nobody there
 			std::vector<std::pair<RE::FormID, RE::NiPointer<RE::BSLight>>> castLights;
 			bool                                                           pick{ false };  // her cell changed, or a creature finished dying
 			std::atomic<bool>                                              any{ false };
 		};
 		Noted gNoted;
+
+		// art effects' ends are noted only while an art light of ours is up or one waits to be hung (main thread, after every relight)
+		void RearmArt()
+		{
+			std::scoped_lock l{ gNoted.lock };
+			gArtArmed = !gArtLit.empty() || !gNoted.artOn.empty();
+		}
 
 		// another mod's lights on a creature of ours come with no word of their own: Light Placer hangs them as the body's parts attach, a
 		// lit ability's light comes at the effect's first update. So a creature that just came, or wears something new, is looked at for a
@@ -659,13 +854,16 @@ namespace Plugin
 			if (!gNoted.any.exchange(false)) {
 				return;
 			}
-			const LightKit::Cost::Scope                                    cost(kCostSlot, "creature events");
-			const auto                                                     s = SettingsNow();
-			std::vector<Loaded>                                            loaded;
-			std::vector<RE::FormID>                                        died, cast, calm, art;
-			std::vector<std::pair<RE::FormID, RE::FormID>>                 worn;
-			std::vector<std::pair<RE::FormID, RE::NiPointer<RE::BSLight>>> castLights;
-			bool                                                           pick = false;
+			const LightKit::Cost::Scope                                                  cost(kCostSlot, "creature events");
+			const auto                                                                   s = SettingsNow();
+			std::vector<Loaded>                                                          loaded;
+			std::vector<RE::FormID>                                                      died, cast, calm, art;
+			std::vector<std::pair<RE::FormID, RE::FormID>>                               worn;
+			std::vector<std::pair<RE::FormID, RE::NiPointer<RE::BSLight>>>               castLights;
+			std::vector<std::uint32_t>                                                   artOn, artOff;
+			std::vector<ImpactOne>                                                       impactGone;
+			std::vector<std::pair<RE::NiPointer<RE::BSTempEffectParticle>, std::size_t>> impactHang;
+			bool                                                                         pick = false;
 			{
 				std::scoped_lock l{ gNoted.lock };
 				loaded.swap(gNoted.loaded);
@@ -673,12 +871,22 @@ namespace Plugin
 				cast.swap(gNoted.cast);
 				calm.swap(gNoted.calm);
 				art.swap(gNoted.art);
+				artOn.swap(gNoted.artOn);
+				artOff.swap(gNoted.artOff);
+				impactGone.swap(gNoted.impactGone);
+				impactHang.swap(gNoted.impactHang);
 				worn.swap(gNoted.worn);
 				castLights.swap(gNoted.castLights);
 				pick = std::exchange(gNoted.pick, false);
 			}
 			for (const auto& [id, bs] : castLights) {
 				PutOutCastLight(id, bs);
+			}
+			for (auto& one : impactGone) {
+				TakeImpact(one, LightKit::Scene());
+			}
+			for (const auto& [particle, row] : impactHang) {
+				HangImpact(particle.get(), row);
 			}
 			Arrivals                             arrivals;
 			std::optional<LightKit::Cost::Scope> loadedCost;
@@ -717,6 +925,14 @@ namespace Plugin
 			for (const auto id : art) {
 				LookAt(id);
 			}
+			// started first: an art that began and ended within one burst is hung and taken off again here
+			if (!artOn.empty()) {
+				LightArt(artOn, false);
+			}
+			if (!artOff.empty()) {
+				ArtGone(artOff);
+			}
+			RearmArt();
 			for (const auto id : died) {
 				if (const auto it = gLit.find(id); it != gLit.end() && !it->second.dying) {
 					StartDeath(it->second, s);
@@ -830,6 +1046,17 @@ namespace Plugin
 				const bool started = func(a_this);
 				if (started && a_this) {
 					Guarded("art start", [a_this]() {
+						// an art a row names: its id only, lit on the main thread (it may start on a job thread)
+						if (ArtRow(a_this->artObject)) {
+							const auto eid = a_this->effectID;
+							Note([eid]() {
+								gNoted.artOn.push_back(eid);
+								gArtArmed = true;
+							});
+						}
+						if (!gWatchTheirArt) {
+							return;
+						}
 						const auto target = a_this->target.get();
 						auto*      actor = target ? target->As<RE::Actor>() : nullptr;
 						if (actor && CouldLight(actor)) {
@@ -839,6 +1066,176 @@ namespace Plugin
 					});
 				}
 				return started;
+			}
+			static inline REL::Relocation<decltype(thunk)> func;
+		};
+
+		// the row of a particle's model name, per thread: particles of a few models update in turn, so the last 16 names are kept with their
+		// row. An entry is found by its address and then its text, since a freed name's address can come back holding another
+		[[nodiscard]] std::optional<std::size_t> RowByModelCached(const char* a_model)
+		{
+			struct Seen
+			{
+				const char*                address{ nullptr };
+				std::string                name;
+				std::optional<std::size_t> row;
+			};
+			thread_local std::array<Seen, 16> seen{};
+			thread_local std::size_t          next{ 0 };
+			const std::string_view            name = a_model ? a_model : "";
+			for (const auto& one : seen) {
+				if (one.address == a_model && one.name == name) {
+					return one.row;
+				}
+			}
+			auto& slot = seen[next];
+			next = (next + 1) % seen.size();
+			slot = { a_model, std::string(name), ImpactRowByModel(a_model) };
+			NoteImpactModel(std::string("model ").append(name));
+			return slot.row;
+		}
+
+		// a splash still loading whose model a row names, until its copy is in place (measured: its name is held while it loads and gone after,
+		// and its updates run on the game's worker threads, any of them). The oldest of 32 gives way, so one that never finished loading leaves
+		// no entry for long; with none waiting, a particle passes on one read
+		std::mutex                                          gPendingLock;
+		std::array<std::pair<const void*, std::size_t>, 32> gPending{};
+		std::size_t                                         gPendingNext{ 0 };
+		std::atomic<std::uint32_t>                          gPendingCount{ 0 };
+
+		void KeepPending(const void* a_particle, std::size_t a_row)
+		{
+			std::scoped_lock l{ gPendingLock };
+			if (std::ranges::any_of(gPending, [a_particle](const auto& a_one) { return a_one.first == a_particle; })) {
+				return;
+			}
+			if (!gPending[gPendingNext].first) {
+				++gPendingCount;
+			}
+			gPending[gPendingNext] = { a_particle, a_row };
+			gPendingNext = (gPendingNext + 1) % gPending.size();
+		}
+
+		[[nodiscard]] std::optional<std::size_t> TakePending(const void* a_particle)
+		{
+			if (gPendingCount.load(std::memory_order_relaxed) == 0) {
+				return std::nullopt;
+			}
+			std::scoped_lock l{ gPendingLock };
+			for (auto& one : gPending) {
+				if (one.first == a_particle) {
+					--gPendingCount;
+					return std::exchange(one, {}).second;
+				}
+			}
+			return std::nullopt;
+		}
+
+		// devbench's list also names the root node of a splash on a frame no row answered (its model's identity once the name is gone; a lit
+		// splash's later frames count too): noted once per name per thread, by the pooled name's address
+		void NoteRootName(const char* a_name)
+		{
+			thread_local std::array<const char*, 16> noted{};
+			thread_local std::size_t                 next{ 0 };
+			if (!a_name || std::ranges::find(noted, a_name) != noted.end()) {
+				return;
+			}
+			noted[next] = a_name;
+			next = (next + 1) % noted.size();
+			NoteImpactModel(std::string("root ").append(a_name));
+		}
+
+		// an impact particle's end: its light out of the table and to the main-thread task (a free may come on any thread)
+		void EndImpact(const void* a_particle)
+		{
+			ImpactOne one;
+			{
+				std::scoped_lock l{ gImpactLock };
+				const auto       it = gImpactLit.find(a_particle);
+				if (it == gImpactLit.end()) {
+					return;
+				}
+				one = std::move(it->second);
+				gImpactLit.erase(it);
+				gImpactCount = gImpactLit.size();
+			}
+			if (one.bs) {
+				Note([&]() { gNoted.impactGone.push_back(std::move(one)); });
+			}
+		}
+
+		// an impact's splash (BSTempEffectParticle, read in the 1.6.1170 exe: its Update moves the finished copy into place, its Detach or its
+		// destructor take it off): every particle passes these three slots, so the idle path is one or two reads
+		struct ImpactUpdate
+		{
+			static bool thunk(RE::BSTempEffectParticle* a_this, float a_delta)
+			{
+				// the model's name is held only until its copy is in place, which this update may do, so its row is read before it
+				const auto named = gImpactRows && a_this && a_this->modelName ? RowByModelCached(a_this->modelName) : std::nullopt;
+				const bool live = func(a_this, a_delta);
+				if (gImpactRows && a_this && a_this->particleObject) {
+					// devbench tells an empty impactData from a record that is not ours by these two
+					gImpactSeen.fetch_add(1, std::memory_order_relaxed);
+					gImpactLastRecord.store(a_this->impactData ? a_this->impactData->GetFormID() : 0, std::memory_order_relaxed);
+					auto row = ImpactRow(a_this->impactData);
+					if (!row) {
+						row = named ? named : TakePending(a_this);
+					}
+					if (!row) {
+						NoteRootName(a_this->particleObject->name.c_str());
+					}
+					// judged once; the light is hung on the main thread, here when the update runs there, else by the task (measured: off it)
+					if (row && ClaimImpact(a_this)) {
+						if (REX::W32::GetCurrentThreadId() == gMainThread) {
+							Guarded("impact light", [a_this, row]() { HangImpact(a_this, *row); });
+						} else {
+							Note([a_this, row]() { gNoted.impactHang.emplace_back(RE::NiPointer<RE::BSTempEffectParticle>(a_this), *row); });
+						}
+					}
+				} else if (named && a_this) {
+					// still loading: its name is gone by the frame its copy is in place, so its row waits for it
+					KeepPending(a_this, *named);
+				}
+				return live;
+			}
+			static inline REL::Relocation<decltype(thunk)> func;
+		};
+
+		struct ImpactDetach
+		{
+			static void thunk(RE::BSTempEffectParticle* a_this)
+			{
+				if (a_this && gImpactCount.load(std::memory_order_relaxed)) {
+					Guarded("impact end", [a_this]() { EndImpact(a_this); });
+				}
+				func(a_this);
+			}
+			static inline REL::Relocation<decltype(thunk)> func;
+		};
+
+		struct ImpactFree
+		{
+			static RE::BSTempEffectParticle* thunk(RE::BSTempEffectParticle* a_this, std::uint32_t a_flags)
+			{
+				if (a_this && gImpactCount.load(std::memory_order_relaxed)) {
+					Guarded("impact freed", [a_this]() { EndImpact(a_this); });
+				}
+				return func(a_this, a_flags);
+			}
+			static inline REL::Relocation<decltype(thunk)> func;
+		};
+
+		// an art effect's end (the slot Light Placer takes its art lights off at): every art effect passes here, so one read with no art light
+		// of ours up or noted; its light is taken off on the main thread
+		struct ArtDetach
+		{
+			static void thunk(RE::ModelReferenceEffect* a_this)
+			{
+				if (a_this && gArtArmed.load(std::memory_order_relaxed)) {
+					const auto eid = a_this->effectID;
+					Note([eid]() { gNoted.artOff.push_back(eid); });
+				}
+				func(a_this);
 			}
 			static inline REL::Relocation<decltype(thunk)> func;
 		};
@@ -918,6 +1315,10 @@ namespace Plugin
 						if (!NothingLit()) {
 							HangAgain();
 						}
+						// a loading screen takes our lights out of the scene's lists, the art ones too: made again on the art still playing
+						DropArt();
+						LightArt({}, true);
+						RearmArt();
 						LookAtEveryone();
 					}));
 				}
@@ -945,8 +1346,21 @@ namespace Plugin
 		Load3D::func = vtbl.write_vfunc(0x6A, Load3D::thunk);
 		Set3D::func = vtbl.write_vfunc(0x6C, Set3D::thunk);
 		// after Light Placer's own hook of this slot (its hooks go in at plugin load, ours at data load), so its lights are there; none with no file to answer
-		if (OthersLightBodies()) {
-			ArtInit::func = REL::Relocation<std::uintptr_t>(RE::ModelReferenceEffect::VTABLE[0]).write_vfunc(0x36, ArtInit::thunk);
+		gWatchTheirArt = OthersLightBodies();
+		REL::Relocation<std::uintptr_t> art{ RE::ModelReferenceEffect::VTABLE[0] };
+		if (gWatchTheirArt || AnyArtRows()) {
+			ArtInit::func = art.write_vfunc(0x36, ArtInit::thunk);
+		}
+		if (AnyArtRows()) {
+			ArtDetach::func = art.write_vfunc(0x27, ArtDetach::thunk);
+		}
+		gImpactRows = AnyImpactRows();
+		gMainThread = REX::W32::GetCurrentThreadId();
+		if (gImpactRows) {
+			REL::Relocation<std::uintptr_t> particle{ RE::BSTempEffectParticle::VTABLE[0] };
+			ImpactUpdate::func = particle.write_vfunc(0x28, ImpactUpdate::thunk);
+			ImpactDetach::func = particle.write_vfunc(0x27, ImpactDetach::thunk);
+			ImpactFree::func = particle.write_vfunc(0x00, ImpactFree::thunk);
 		}
 		SKSE::log::info("lights follow the game's events; their motion is the game's own dimmer controllers (light cap {})", Cap());
 	}
@@ -962,6 +1376,13 @@ namespace Plugin
 			gNoted.cast.clear();
 			gNoted.calm.clear();
 			gNoted.art.clear();
+			gNoted.artOn.clear();
+			gNoted.artOff.clear();
+			gNoted.impactHang.clear();
+			for (auto& one : gNoted.impactGone) {
+				TakeImpact(one, LightKit::Scene());  // a light handed on is still in the scene: off, never only forgotten
+			}
+			gNoted.impactGone.clear();
 			gNoted.worn.clear();
 			gNoted.castLights.clear();
 			gNoted.pick = false;
@@ -982,6 +1403,8 @@ namespace Plugin
 				}
 			}
 			Pick(SettingsNow(), {}, true);
+			LightArt({}, true);
+			RearmArt();
 			LookAtEveryone();
 		}));
 	}
@@ -990,6 +1413,7 @@ namespace Plugin
 	{
 		const auto s = SettingsNow();
 		ApplySpellRecords(s);
+		RefreshStreams();
 		// a body a queued load handed over is in no list until the game stores it: carried, as HangAgain carries it
 		Arrivals still;
 		for (const auto& [id, lit] : gLit) {
@@ -999,6 +1423,8 @@ namespace Plugin
 		}
 		DropAll();
 		Pick(s, still, false);
+		LightArt({}, true);
+		RearmArt();
 		// a switch: every creature's other lights follow at once, those Pick does not hold a light for too
 		if (auto* lists = a_othersToo ? RE::ProcessLists::GetSingleton() : nullptr) {
 			for (const auto* handles : { &lists->highActorHandles, &lists->middleHighActorHandles }) {
@@ -1018,6 +1444,18 @@ namespace Plugin
 	std::uint32_t LightsHungAgain() { return gHungAgain.load(); }
 
 	std::uint32_t CastLightsPutOut() { return gCastLightsOut.load(); }
+
+	std::size_t ArtLitCount() { return gArtLit.size(); }
+
+	std::size_t ImpactLitCount() { return gImpactCount.load(); }
+
+	std::pair<std::uint64_t, RE::FormID> ImpactSeen() { return { gImpactSeen.load(std::memory_order_relaxed), gImpactLastRecord.load(std::memory_order_relaxed) }; }
+
+	std::vector<std::string> ImpactModelsSeen()
+	{
+		std::scoped_lock l{ gImpactModelsLock };
+		return gImpactModels;
+	}
 
 	nlohmann::json LitReport()
 	{

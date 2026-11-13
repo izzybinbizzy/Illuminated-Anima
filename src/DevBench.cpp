@@ -24,10 +24,10 @@ namespace Plugin
 		constexpr const char* kKey = "creaturelighting";
 
 		constexpr const char* kDescriptor =
-			R"json({"description":"Illuminated - Creature Lighting NG - the lighting found (automatic), the settings, the creatures files read, the other creature lighting mods installed and the creatures each one lights too (ours replaces it there unless its switch gives them back), every creature lit around the player now with each light's color, fade, radius and its death / cast state, how many abilities that carry a light the game's apply event announced, how many casting lights a creature left up as its 3D went were put out, and the cost in microseconds and the call count of the task that acts on what was noted. Read only.","inputSchema":{"type":"object","properties":{}},"readOnly":true})json";
+			R"json({"description":"Illuminated - Creature Lighting NG - the lighting found (automatic), the settings (the creatures switched off one by one among them), the creatures files read, the creature switches by group, the other creature lighting mods installed and the creatures each one lights too (ours replaces it there unless its switch gives them back), every creature lit around the player now with each light's color, fade, radius and its death / cast state, how many abilities that carry a light the game's apply event announced, how many casting lights a creature left up as its 3D went were put out, how many art objects (a hit art, an enchantment's art) carry a light of ours now, how many impact splashes do, the stream rows (rows and row lights now, and hung since the game started), and the cost in microseconds and the call count of the task that acts on what was noted. Read only.","inputSchema":{"type":"object","properties":{}},"readOnly":true})json";
 
 		constexpr const char* kTool =
-			R"json({"description":"Illuminated - Creature Lighting NG (lights creatures): change its settings the way its menu does, or light the creatures around the player again. action=set changes one setting (saved, then applied on the main thread) and replies with the state after it: lights (0/1), glow / spell / burst / eyes / machines (0/1, the five kinds), natural (0/1, ice, wind, water and stone creatures), brightness (10-300, percent), reach (25-300, percent), flicker / deathFade / castSurge (0/1), TheirsEmissive / TheirsElementals / TheirsDarenii / TheirsLuminous / TheirsEnhanced / TheirsIlluminatedAtronachs / TheirsOther (0/1, that mod's creatures keep its own light and ours goes off on them; TheirsOther = every other mod that lights one of our creatures); CenturionSteam (0/1, the Dwarven Centurion's steam and the steam spells that use it); menuPage (a test, never saved: 1 = the settings page in a window of its own for a picture, 0 = closed). action=rescan drops every light and lights the creatures around the player again at once. Read state with inspect kind=creaturelighting.","inputSchema":{"type":"object","properties":{"action":{"type":"string","enum":["set","rescan"]},"setting":{"type":"string","enum":["lights","glow","spell","burst","eyes","machines","natural","brightness","reach","flicker","deathFade","castSurge","TheirsEmissive","TheirsElementals","TheirsDarenii","TheirsLuminous","TheirsEnhanced","TheirsIlluminatedAtronachs","TheirsOther","CenturionSteam","menuPage"]},"value":{"type":"number"}},"required":["action"]}})json";
+			R"json({"description":"Illuminated - Creature Lighting NG (lights creatures): change its settings the way its menu does, or light the creatures around the player again. action=set changes one setting (saved, then applied on the main thread) and replies with the state after it: lights (0/1), glow / spell / burst / eyes / machines (0/1, the five kinds), natural (0/1, ice, wind, water and stone creatures), brightness (10-300, percent), reach (25-300, percent), flicker / deathFade / castSurge (0/1), TheirsEmissive / TheirsElementals / TheirsDarenii / TheirsLuminous / TheirsEnhanced / TheirsIlluminatedAtronachs / TheirsOther (0/1, that mod's creatures keep its own light and ours goes off on them; TheirsOther = every other mod that lights one of our creatures); CenturionSteam (0/1, the Dwarven Centurion's steam and the steam spells that use it); AshHand (0/1, the ash glow in the hands while the ash spells are cast); creature:<name> (0/1, one creature's own switch, a name from inspect's creatureList); menuPage (a test, never saved: 1 = the settings page in a window of its own for a picture, 0 = closed). action=rescan drops every light and lights the creatures around the player again at once. Read state with inspect kind=creaturelighting.","inputSchema":{"type":"object","properties":{"action":{"type":"string","enum":["set","rescan"]},"setting":{"anyOf":[{"type":"string","enum":["lights","glow","spell","burst","eyes","machines","natural","brightness","reach","flicker","deathFade","castSurge","TheirsEmissive","TheirsElementals","TheirsDarenii","TheirsLuminous","TheirsEnhanced","TheirsIlluminatedAtronachs","TheirsOther","CenturionSteam","AshHand","menuPage"]},{"type":"string","pattern":"^creature:.+"}]},"value":{"type":"number"}},"required":["action"]}})json";
 
 		json SettingsJson(const Anima::Settings& a_s)
 		{
@@ -42,7 +42,23 @@ namespace Plugin
 			for (std::size_t i = 0; i < Anima::kExtraCount; ++i) {
 				j[std::string(Anima::kExtras[i])] = a_s.extras[i];
 			}
+			json off = json::array();
+			if (a_s.creaturesOff) {
+				for (const auto& creature : *a_s.creaturesOff) {
+					off.push_back(creature);
+				}
+			}
+			j["creaturesOff"] = std::move(off);
 			return j;
+		}
+
+		json CreatureListJson()
+		{
+			json out = json::array();
+			for (const auto& [group, creatures] : CreatureList()) {
+				out.push_back({ { "group", group }, { "creatures", creatures } });
+			}
+			return out;
 		}
 
 		json OthersJson()
@@ -55,6 +71,12 @@ namespace Plugin
 				}
 			}
 			return out;
+		}
+
+		json StreamsJson()
+		{
+			const auto c = StreamCounts();
+			return { { "rows", c[0] }, { "lights", c[1] }, { "rowsSeen", c[2] }, { "lightsSeen", c[3] } };
 		}
 
 		json CostJson()
@@ -73,9 +95,11 @@ namespace Plugin
 		{
 			auto now = DevBenchGlue::OnMainThread([]() {
 				return json{ { "lighting", LightingName(LightingFound()) }, { "inverseSquare", InverseSquare() }, { "settings", SettingsJson(SettingsNow()) },
-					{ "creatureFiles", FilesRead() }, { "creatureRows", CreatureRowCount() }, { "spellRecordsLit", SpellRecordCount() },
+					{ "creatureFiles", FilesRead() }, { "creatureRows", CreatureRowCount() }, { "creatureList", CreatureListJson() }, { "spellRecordsLit", SpellRecordCount() },
 					{ "otherMods", OthersJson() }, { "eyesMod", EyesModLoaded() }, { "lit", LitReport() },
-					{ "loadEvents", { { "litAbilities", LitAbilitiesNoted() }, { "hungAgain", LightsHungAgain() }, { "castLightsOut", CastLightsPutOut() } } }, { "cost", CostJson() } };
+					{ "loadEvents", { { "litAbilities", LitAbilitiesNoted() }, { "hungAgain", LightsHungAgain() }, { "castLightsOut", CastLightsPutOut() } } }, { "artLit", ArtLitCount() }, { "impactLit", ImpactLitCount() },
+					{ "impactSeen", { { "particles", ImpactSeen().first }, { "lastRecord", std::format("{:08X}", ImpactSeen().second) }, { "models", ImpactModelsSeen() } } },
+					{ "streams", StreamsJson() }, { "cost", CostJson() } };
 			});
 			return now ? *now : DevBenchGlue::NotRunYet();
 		}
@@ -123,6 +147,15 @@ namespace Plugin
 			for (std::size_t i = 0; i < Anima::kExtraCount; ++i) {
 				if (a_key == Anima::kExtras[i]) {
 					return [i, on](Anima::Settings& a_s) { a_s.extras[i] = on; };
+				}
+			}
+			// creature:<name> - one creature's menu switch; only a creature the menu lists
+			if (constexpr std::string_view prefix = "creature:"; a_key.starts_with(prefix)) {
+				std::string creature = a_key.substr(prefix.size());
+				for (const auto& [group, creatures] : CreatureList()) {
+					if (std::ranges::find(creatures, creature) != creatures.end()) {
+						return [creature, on](Anima::Settings& a_s) { Anima::SetCreatureOn(a_s, creature, on); };
+					}
 				}
 			}
 			return {};

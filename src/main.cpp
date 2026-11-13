@@ -52,6 +52,7 @@ namespace
 		OfferToPicker();
 		ReadSpellRecords();
 		ApplySpellRecords(SettingsNow());
+		InstallStreams();
 		InstallLights();  // before the menu's steps: a throw in them leaves the creatures lit
 		SKSE::log::info("{}", Translation::Load("Data/SKSE/Plugins/IlluminatedCreatureLightingNG/Translation.json"));
 		RegisterMenu();
@@ -82,6 +83,7 @@ namespace
 		case SKSE::MessagingInterface::kPreLoadGame:
 		case SKSE::MessagingInterface::kNewGame:
 			DropLights();  // the creatures they hang on are the old game's
+			DropStreams();
 			break;
 		case SKSE::MessagingInterface::kPostLoadGame:
 			LookAround();  // the creatures loaded with the save sent no load event of their own

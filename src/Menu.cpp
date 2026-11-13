@@ -4,8 +4,8 @@
 //
 // The SKSE Menu Framework page - every setting this mod has (settings live in the SKSE menu only). One page: what was found,
 // the lights' switch, the kinds, the one switch for elements that should not glow, the lights of their own switch, Brightness, Reach, the three ways a
-// light moves, and Other Mods' Lights - one switch per other creature lighting mod that is installed. A change is saved and
-// applied on the game's main thread when it is let go.
+// light moves, a checkbox per creature, and Other Mods' Lights - one switch per other creature lighting mod that is installed.
+// A change is saved and applied on the game's main thread when it is let go.
 
 #ifndef WIN32_LEAN_AND_MEAN
 #	define WIN32_LEAN_AND_MEAN
@@ -154,6 +154,7 @@ namespace Plugin
 			// each light of its own switch (Anima::kExtras, in that order): on by default, off here for a player who does not want it
 			constexpr std::array<std::array<const char*, 2>, Anima::kExtraCount> kExtraText{ {
 				{ TR_MARK("Dwarven Centurion steam"), TR_MARK("Lights the steam Dwarven Centurions breathe, and the steam spells that use it.") },
+				{ TR_MARK("Ash in the hands"), TR_MARK("Lights the ash glow in the hands while ash spells are cast, like Ash Shell and the ash spawn and ash guardian conjurations.") },
 			} };
 			for (std::size_t i = 0; i < Anima::kExtraCount; ++i) {
 				bool v = SettingsNow().extras[i];
@@ -175,6 +176,29 @@ namespace Plugin
 			Field(T("Flicker and pulse"), &Anima::Settings::flicker, T("Flame creatures flicker, storm creatures crackle, and wisps and spirits breathe."));
 			Field(T("Fade on death"), &Anima::Settings::deathFade, T("A dying creature's light fades over a few seconds, leaving an ember on flame creatures."));
 			Field(T("Glow when casting"), &Anima::Settings::surge, T("A creature's light brightens briefly while it casts or breathes."));
+
+			// one dropdown, a sub-dropdown per creatures file, a checkbox beside each creature
+			if (const auto& list = CreatureList(); !list.empty()) {
+				Header(Icon::kBulb, T("Creatures"));
+				if (CollapsingHeader(T("Creature switches"))) {
+					MenuStyle::Note(T("Untick a creature to turn off its lights."));
+					const auto s = SettingsNow();
+					for (const auto& [group, creatures] : list) {
+						PushID(group.c_str());
+						if (TreeNode(group.c_str())) {
+							for (const auto& creature : creatures) {
+								bool v = Anima::CreatureOn(s, creature);
+								if (Switch(creature.c_str(), v, T("Ticked: this creature is lit."))) {
+									UpdateSettings([&](Anima::Settings& a_s) { Anima::SetCreatureOn(a_s, creature, v); });
+									Changed();
+								}
+							}
+							TreePop();
+						}
+						PopID();
+					}
+				}
+			}
 
 			const auto found = OthersFound();
 			if (std::ranges::any_of(found, [](bool a_b) { return a_b; })) {
