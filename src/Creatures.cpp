@@ -144,24 +144,49 @@ namespace Plugin
 			SKSE::log::info("creatures: {} ghost shader(s) named, {} effect(s) and {} abilit(ies) that play one", byShader.size(), byEffect.size(), gGhostSpells.size());
 		}
 
-		// the ghost rows of an actor whose own spell list holds such an ability (its base's, the copy the game made of a template's
-		// included); none for most characters, after a short look at their few abilities
-		[[nodiscard]] const std::vector<std::size_t>* GhostRowsOf(RE::Actor* a_actor)
+		// each ghost ability in an actor's own spell list (its base's, the copy the game made of a template's included) -> its rows; a_visit
+		// returns false to stop. None for most characters, after a short look at their few abilities
+		template <class Visit>
+		void ForEachGhostSpell(RE::Actor* a_actor, Visit a_visit)
 		{
 			if (gGhostSpells.empty()) {
-				return nullptr;
+				return;
 			}
 			auto*       npc = a_actor->GetActorBase();
 			const auto* list = npc ? npc->actorEffects : nullptr;
 			if (!list || !list->spells) {
-				return nullptr;
+				return;
 			}
 			for (std::uint32_t s = 0; s < list->numSpells; ++s) {
-				if (const auto it = gGhostSpells.find(list->spells[s]); it != gGhostSpells.end()) {
-					return &it->second;
+				if (const auto it = gGhostSpells.find(list->spells[s]); it != gGhostSpells.end() && !a_visit(it->second)) {
+					return;
 				}
 			}
-			return nullptr;
+		}
+
+		[[nodiscard]] bool HasGhostSpell(RE::Actor* a_actor)
+		{
+			bool found = false;
+			ForEachGhostSpell(a_actor, [&](const std::vector<std::size_t>&) {
+				found = true;
+				return false;
+			});
+			return found;
+		}
+
+		// the rows of every ghost ability it wears, each once: two abilities (an eyes shader and a glow shader) both count
+		[[nodiscard]] std::vector<std::size_t> GhostRowsOf(RE::Actor* a_actor)
+		{
+			std::vector<std::size_t> out;
+			ForEachGhostSpell(a_actor, [&](const std::vector<std::size_t>& a_rows) {
+				for (const auto i : a_rows) {
+					if (std::ranges::find(out, i) == out.end()) {
+						out.push_back(i);
+					}
+				}
+				return true;
+			});
+			return out;
 		}
 
 		void IndexRows()
@@ -676,15 +701,15 @@ namespace Plugin
 		}
 		const auto race = gByRace.find(a_actor->GetRace());
 		auto       out = Anima::RowsFor(rows, race != gByRace.end() ? race->second : std::vector<std::size_t>{});
-		if (const auto* ghost = GhostRowsOf(a_actor)) {
-			out = Anima::WithGhostRows(std::move(out), *ghost, [](std::size_t i) { return gRows[i].kind == Anima::Kind::kGlow; });
+		if (const auto ghost = GhostRowsOf(a_actor); !ghost.empty()) {
+			out = Anima::WithGhostRows(std::move(out), ghost, [](std::size_t i) { return gRows[i].kind == Anima::Kind::kGlow; });
 		}
 		return out;
 	}
 
 	bool CouldLight(RE::Actor* a_actor)
 	{
-		return a_actor && (gByRace.contains(a_actor->GetRace()) || gRowSkins.contains(SkinOf(a_actor)) || GhostRowsOf(a_actor));
+		return a_actor && (gByRace.contains(a_actor->GetRace()) || gRowSkins.contains(SkinOf(a_actor)) || HasGhostSpell(a_actor));
 	}
 
 	bool RowModelsLitByOthers(std::size_t a_row)
