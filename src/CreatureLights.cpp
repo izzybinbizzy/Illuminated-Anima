@@ -64,6 +64,8 @@ namespace Plugin
 		std::atomic<std::uint32_t> gLitAbilitiesNoted{ 0 };
 		// how many creatures were still lit when a loading screen ended (the game check: does any keep its body through one); main thread only
 		std::atomic<std::uint32_t> gHungAgain{ 0 };
+		// how many casting lights a creature left up as its 3D went were put out (the game check for his 580); main thread only
+		std::atomic<std::uint32_t> gCastLightsOut{ 0 };
 
 		// the light limit is Light Limit Fix's, linear or inverse square alike
 		[[nodiscard]] std::size_t Cap() { return LightLimitFix() ? kCapShaders : kCapPlain; }
@@ -543,10 +545,12 @@ namespace Plugin
 			std::vector<RE::FormID>                        died;
 			std::vector<RE::FormID>                        cast;
 			std::vector<RE::FormID>                        calm;
-			std::vector<RE::FormID>                        art;            // an art object started on it: another mod's light may hang on that
-			std::vector<std::pair<RE::FormID, RE::FormID>> worn;           // id, the ability's effect that carries a light
-			bool                                           pick{ false };  // her cell changed, or a creature finished dying
-			std::atomic<bool>                              any{ false };
+			std::vector<RE::FormID>                        art;   // an art object started on it: another mod's light may hang on that
+			std::vector<std::pair<RE::FormID, RE::FormID>> worn;  // id, the ability's effect that carries a light
+			// a casting light still up when its caster's 3D went: the game leaves it in the scene with nobody there
+			std::vector<std::pair<RE::FormID, RE::NiPointer<RE::BSLight>>> castLights;
+			bool                                                           pick{ false };  // her cell changed, or a creature finished dying
+			std::atomic<bool>                                              any{ false };
 		};
 		Noted gNoted;
 
@@ -625,17 +629,39 @@ namespace Plugin
 			}
 		}
 
+		// a creature that went in the middle of a cast (a summon running out, Disable, its cell unloading) leaves its casting light in the
+		// scene with nobody there, lighting the ground (his 580). Out of the scene first, then its caster lets go of it: a BSLight that is
+		// still held keeps lighting the geometry it touched (the plugin framework section 7)
+		void PutOutCastLight(RE::FormID a_id, const RE::NiPointer<RE::BSLight>& a_bs)
+		{
+			auto* actor = RE::TESForm::LookupByID<RE::Actor>(a_id);
+			if (actor && actor->Is3DLoaded()) {
+				return;  // its body came back before this task ran: the light is the game's again
+			}
+			LightKit::TakeOff(LightKit::Scene(), a_bs);
+			++gCastLightsOut;
+			if (!actor) {
+				return;
+			}
+			for (auto* caster : actor->GetActorRuntimeData().magicCasters) {
+				if (caster && caster->light.get() == a_bs.get()) {
+					caster->light.reset();
+				}
+			}
+		}
+
 		void Drain()
 		{
 			if (!gNoted.any.exchange(false)) {
 				return;
 			}
-			const LightKit::Cost::Scope                    cost(kCostSlot, "creature events");
-			const auto                                     s = SettingsNow();
-			std::vector<Loaded>                            loaded;
-			std::vector<RE::FormID>                        died, cast, calm, art;
-			std::vector<std::pair<RE::FormID, RE::FormID>> worn;
-			bool                                           pick = false;
+			const LightKit::Cost::Scope                                    cost(kCostSlot, "creature events");
+			const auto                                                     s = SettingsNow();
+			std::vector<Loaded>                                            loaded;
+			std::vector<RE::FormID>                                        died, cast, calm, art;
+			std::vector<std::pair<RE::FormID, RE::FormID>>                 worn;
+			std::vector<std::pair<RE::FormID, RE::NiPointer<RE::BSLight>>> castLights;
+			bool                                                           pick = false;
 			{
 				std::scoped_lock l{ gNoted.lock };
 				loaded.swap(gNoted.loaded);
@@ -644,7 +670,11 @@ namespace Plugin
 				calm.swap(gNoted.calm);
 				art.swap(gNoted.art);
 				worn.swap(gNoted.worn);
+				castLights.swap(gNoted.castLights);
 				pick = std::exchange(gNoted.pick, false);
+			}
+			for (const auto& [id, bs] : castLights) {
+				PutOutCastLight(id, bs);
 			}
 			Arrivals                             arrivals;
 			std::optional<LightKit::Cost::Scope> loadedCost;
@@ -740,6 +770,26 @@ namespace Plugin
 			static inline REL::Relocation<decltype(thunk)> func;
 		};
 
+		// a creature of ours whose 3D goes while a caster still holds its casting light: each such light noted with it, put out on the main thread
+		void NoteCastLights(RE::Character* a_actor)
+		{
+			std::vector<RE::NiPointer<RE::BSLight>> up;
+			for (auto* caster : a_actor->GetActorRuntimeData().magicCasters) {
+				if (caster && caster->light) {
+					up.push_back(caster->light);
+				}
+			}
+			if (up.empty()) {
+				return;
+			}
+			const auto id = a_actor->GetFormID();
+			Note([&]() {
+				for (auto& bs : up) {
+					gNoted.castLights.emplace_back(id, std::move(bs));
+				}
+			});
+		}
+
 		// a character's 3D let go: Disable, a cell's unload and a replaced body come through this slot, a queued load's store does not
 		struct Set3D
 		{
@@ -751,6 +801,10 @@ namespace Plugin
 				if (on ? CouldLight(a_this) : !NothingLit() || gNoted.any.load(std::memory_order_relaxed)) {
 					const auto id = a_this->GetFormID();
 					Note([id, on]() { gNoted.loaded.push_back({ id, on, {} }); });
+				}
+				// a casting light still up as a creature of ours goes is the game's leftover (his 580); its casters are read only then
+				if (!on && a_this && CouldLight(a_this)) {
+					Guarded("cast light at a body's end", [a_this]() { NoteCastLights(a_this); });
 				}
 			}
 			static inline REL::Relocation<decltype(thunk)> func;
@@ -897,6 +951,7 @@ namespace Plugin
 			gNoted.calm.clear();
 			gNoted.art.clear();
 			gNoted.worn.clear();
+			gNoted.castLights.clear();
 			gNoted.pick = false;
 		}
 		gLooking.clear();
@@ -949,6 +1004,8 @@ namespace Plugin
 	std::uint32_t LitAbilitiesNoted() { return gLitAbilitiesNoted.load(); }
 
 	std::uint32_t LightsHungAgain() { return gHungAgain.load(); }
+
+	std::uint32_t CastLightsPutOut() { return gCastLightsOut.load(); }
 
 	nlohmann::json LitReport()
 	{

@@ -95,6 +95,7 @@ namespace Plugin
 	[[nodiscard]] nlohmann::json LitReport();          // main thread: every creature lit now and its lights (DevBench)
 	[[nodiscard]] std::uint32_t  LitAbilitiesNoted();  // how many applied abilities that carry a light the game's event announced (DevBench)
 	[[nodiscard]] std::uint32_t  LightsHungAgain();    // how many creatures were still lit when a loading screen ended (DevBench)
+	[[nodiscard]] std::uint32_t  CastLightsPutOut();   // how many casting lights a creature left up as its 3D went were put out (DevBench)
 
 	// ------------------------------------------------------------------ Menu.cpp / DevBench.cpp
 	void RegisterMenu();

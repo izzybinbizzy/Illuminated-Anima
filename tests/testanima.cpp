@@ -194,6 +194,11 @@ namespace
 		CHECK((Anima::AddonsWorn(std::vector{ 1, 2, 3 }, std::vector{ 3, 1 }, fits) == std::vector{ 1, 3 }));
 		CHECK((Anima::AddonsWorn(std::vector{ 1, 2, 3 }, std::vector<int>{}, fits) == std::vector{ 1, 2, 3 }));
 		CHECK((Anima::AddonsWorn(std::vector{ 1, 2, 3 }, std::vector{ 9 }, fits) == std::vector{ 1, 2, 3 }));
+		// a null addon (0 here) never counts, on either path
+		CHECK((Anima::AddonsWorn(std::vector{ 0, 1, 2 }, std::vector<int>{}, fits) == std::vector{ 1, 2 }));
+		CHECK((Anima::AddonsWorn(std::vector{ 0, 1, 2 }, std::vector{ 9 }, fits) == std::vector{ 1, 2 }));
+		CHECK((Anima::AddonsWorn(std::vector{ 0, 1, 2 }, std::vector{ 2 }, fits) == std::vector{ 2 }));
+		CHECK(Anima::AddonsWorn(std::vector{ 0, 0 }, std::vector<int>{}, fits).empty());
 		CHECK(d.kinds[0] && d.kinds[1] && d.kinds[2] && d.kinds[3]);
 
 		Anima::Settings s;
@@ -204,14 +209,17 @@ namespace
 		s.reach = 75;
 		s.flicker = false;
 		s.theirs = { true, false, true, false };
+		s.extras[0] = false;
 		std::ostringstream out;
 		Anima::WriteSettings(s, out);
 		std::istringstream in(out.str());
 		Anima::Settings    r;
 		const auto         keys = Anima::ReadSettings(in, r);
-		CHECK(keys == 12 + Anima::kOthers);
+		CHECK(keys == 12 + Anima::kOthers + Anima::kExtraCount);
 		CHECK(!r.on && !r.kinds[2] && r.kinds[1] && r.natural && r.brightness == 150 && r.reach == 75 && !r.flicker && r.deathFade);
 		CHECK(r.theirs[0] && !r.theirs[1] && r.theirs[2] && !r.theirs[3]);
+		CHECK(!r.extras[0]);                                                   // a light of its own switch keeps its off through the file
+		CHECK(std::ranges::all_of(d.extras, [](bool a_on) { return a_on; }));  // every such light is on by default
 
 		std::istringstream odd("\xEF\xBB\xBF[Settings]\nBrightness=99999\nReach=abc\nUnknown=1\nLights = off\n; Reach=10\n");
 		Anima::Settings    o;
@@ -237,6 +245,38 @@ namespace
 		s.kinds[0] = true;
 		s.on = false;
 		CHECK(!Anima::Shown(fire, s));
+
+		// a row of its own switch (his 575): read off switch=, shown only while that switch is on; an unknown switch name is no switch
+		std::istringstream steam(
+			"[creature]\nname=Steam\nmodel=magic\\steam.nif\nkind=spell\nelement=fire\nswitch=CenturionSteam\ncolor=255,133,75\n"
+			"[creature]\nname=Odd\nmodel=magic\\odd.nif\nkind=spell\nelement=fire\nswitch=NoSuchSwitch\ncolor=1,2,3\n");
+		std::size_t skipped = 0;
+		const auto  rows = Anima::ReadCreatures(steam, skipped);
+		CHECK(rows.size() == 2 && skipped == 0);
+		if (rows.size() == 2) {
+			CHECK(rows[0].extra == std::optional<std::size_t>(0) && !rows[1].extra);
+			Anima::Settings e;
+			CHECK(Anima::Shown(rows[0], e) && Anima::Shown(rows[1], e));
+			e.extras[0] = false;
+			CHECK(!Anima::Shown(rows[0], e) && Anima::Shown(rows[1], e));
+			e.extras[0] = true;
+			e.kinds[static_cast<std::size_t>(Anima::Kind::kSpell)] = false;
+			CHECK(!Anima::Shown(rows[0], e));  // its kind's switch still rules it
+		}
+		Anima::Row stray;
+		stray.extra = Anima::kExtraCount;  // never made by the reader; a bad index lights nothing rather than reading past the switches
+		CHECK(!Anima::Shown(stray, Anima::Settings{}));
+
+		// a ghost row (his 573): read off shader= alone, it names a creature; it joins only a creature with no glow of its own
+		std::istringstream ghost("[creature]\nname=Ghost\nshader=0x3B6CB~Skyrim.esm\nelement=spirit\ncolor=114,170,255\npoint=0,0,64\n");
+		std::size_t        gs = 0;
+		const auto         ghosts = Anima::ReadCreatures(ghost, gs);
+		CHECK(ghosts.size() == 1 && gs == 0 && ghosts[0].shaders.size() == 1 && ghosts[0].shaders[0] == "0x3B6CB~Skyrim.esm");
+		const auto glow = [](std::size_t a_i) { return a_i == 1; };  // row 1 a glow, row 2 eyes, row 9 the ghost
+		CHECK((Anima::WithGhostRows(std::vector<std::size_t>{}, { 9 }, glow) == std::vector<std::size_t>{ 9 }));
+		CHECK((Anima::WithGhostRows(std::vector<std::size_t>{ 2 }, { 9 }, glow) == std::vector<std::size_t>{ 2, 9 }));
+		CHECK((Anima::WithGhostRows(std::vector<std::size_t>{ 1, 2 }, { 9 }, glow) == std::vector<std::size_t>{ 1, 2 }));
+		CHECK((Anima::WithGhostRows(std::vector<std::size_t>{ 9 }, { 9 }, glow) == std::vector<std::size_t>{ 9 }));
 	}
 
 	void OtherMods()

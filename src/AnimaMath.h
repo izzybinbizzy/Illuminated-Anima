@@ -123,22 +123,29 @@ namespace Anima
 	// one creature of a creatures file: which creature (by race editor ID, or by a model its body wears), its light and its look
 	struct Row
 	{
-		std::string              name;
-		std::vector<std::string> races;    // race editor IDs, lower case
-		std::vector<std::string> models;   // body model paths, NormalPath
-		std::vector<std::string> nodes;    // bones the light hangs on, the first found wins (a body replacer's light rides its own bones)
-		std::vector<Point>       offsets;  // on such a bone: one light per offset, in the bone's frame; none = one light on the bone itself
-		std::vector<Point>       points;   // on a body with none of those bones: one light per point, in the creature's root frame
-		Kind                     kind{ Kind::kGlow };
-		Element                  element{ Element::kSpirit };
-		Rgb                      rgb{ 255, 255, 255 };
-		float                    reach{ 256.0f };
-		float                    strength{ 1.0f };
-		bool                     ember{ false };  // a small light stays on its remains after the death fade
-		std::vector<std::string> records;         // a spell or burst row: the game records it lights, "0x<id>~<plugin>"
-		float                    size{ 2.0f };    // an inverse-square light's size (Community Shaders)
-		std::vector<std::string> skins;           // skin records, "0x<id>~<plugin>": two looks of one body model told apart by the skin worn
+		std::string                name;
+		std::vector<std::string>   races;    // race editor IDs, lower case
+		std::vector<std::string>   models;   // body model paths, NormalPath
+		std::vector<std::string>   nodes;    // bones the light hangs on, the first found wins (a body replacer's light rides its own bones)
+		std::vector<Point>         offsets;  // on such a bone: one light per offset, in the bone's frame; none = one light on the bone itself
+		std::vector<Point>         points;   // on a body with none of those bones: one light per point, in the creature's root frame
+		Kind                       kind{ Kind::kGlow };
+		Element                    element{ Element::kSpirit };
+		Rgb                        rgb{ 255, 255, 255 };
+		float                      reach{ 256.0f };
+		float                      strength{ 1.0f };
+		bool                       ember{ false };  // a small light stays on its remains after the death fade
+		std::vector<std::string>   records;         // a spell or burst row: the game records it lights, "0x<id>~<plugin>"
+		float                      size{ 2.0f };    // an inverse-square light's size (Community Shaders)
+		std::vector<std::string>   skins;           // skin records, "0x<id>~<plugin>": two looks of one body model told apart by the skin worn
+		std::vector<std::string>   shaders;         // effect shaders, "0x<id>~<plugin>": a see-through creature whose own ability plays one (a ghost)
+		std::optional<std::size_t> extra;           // a light of its own switch (switch=, kExtras): the menu turns it off apart from its kind
 	};
+
+	// the lights a player can turn off on their own, each a switch in the menu, on by default (his 575: "make these toggles like the configs
+	// we have for illuminated in case users dont want them"); a row names one with switch=<key>. Menu.cpp holds each one's text
+	inline constexpr std::array<std::string_view, 1> kExtras{ "CenturionSteam" };
+	inline constexpr std::size_t                     kExtraCount = kExtras.size();
 
 	// a model path as compared everywhere: lower case, backslashes, no leading "meshes\" or "data\meshes\"
 	[[nodiscard]] inline std::string NormalPath(std::string_view a_path)
@@ -261,12 +268,16 @@ namespace Anima
 				a_row.records.emplace_back(a_value);
 			} else if (key == "skin") {
 				a_row.skins.emplace_back(a_value);
+			} else if (key == "shader") {
+				a_row.shaders.emplace_back(a_value);
 			} else if (key == "size") {
 				if (const auto n = Numbers(a_value, 1); n && n->size() == 1) {
 					a_row.size = std::clamp((*n)[0], 0.5f, 8.0f);
 				}
 			} else if (key == "ember") {
 				a_row.ember = SameText(a_value, "yes") || a_value == "1" || SameText(a_value, "true");
+			} else if (key == "switch") {
+				a_row.extra = IndexOf(kExtras, a_value);
 			}
 			return true;
 		}
@@ -280,7 +291,7 @@ namespace Anima
 		std::optional<Row> row;
 		bool               ok = true;
 		const auto         finish = [&]() {
-			if (row && ((row->races.empty() && row->models.empty() && row->records.empty() && row->skins.empty()) || !ok)) {
+			if (row && ((row->races.empty() && row->models.empty() && row->records.empty() && row->skins.empty() && row->shaders.empty()) || !ok)) {
 				++a_skipped;
 			} else if (row) {
 				if (row->points.empty()) {
@@ -318,6 +329,21 @@ namespace Anima
 	[[nodiscard]] inline std::vector<std::size_t> RowsFor(const std::vector<std::size_t>& a_body, const std::vector<std::size_t>& a_race)
 	{
 		return a_body.empty() ? a_race : a_body;
+	}
+
+	// A see-through creature's ghost rows (shader=, his 573) join its rows only when none of them already gives it a glow: a ghost of a
+	// creature we light keeps its own light, and a ghost of anything else (a sabre cat, a person, a spirit summon) gets the ghost's
+	template <class IsGlow>
+	[[nodiscard]] std::vector<std::size_t> WithGhostRows(std::vector<std::size_t> a_rows, const std::vector<std::size_t>& a_ghost, IsGlow a_isGlow)
+	{
+		if (!a_ghost.empty() && std::ranges::none_of(a_rows, a_isGlow)) {
+			for (const auto i : a_ghost) {
+				if (std::ranges::find(a_rows, i) == a_rows.end()) {
+					a_rows.push_back(i);
+				}
+			}
+		}
+		return a_rows;
 	}
 
 	// where a row's lights sit: on a bone it names (its offsets, or the bone itself), else at its points in the creature's root frame
@@ -496,33 +522,45 @@ namespace Anima
 	}
 
 	// a skin's addons that count for the warning: those the game puts on a race that wears the skin; every one when no wearer is
-	// known, or when no known wearer takes any of them (a race read off a template)
+	// known, or when no known wearer takes any of them (a race read off a template). A null addon never counts
 	template <class Addons, class Races, class Fits>
 	[[nodiscard]] auto AddonsWorn(const Addons& a_addons, const Races& a_races, Fits a_fits)
 	{
-		std::vector<std::ranges::range_value_t<Addons>> out;
+		std::vector<std::ranges::range_value_t<Addons>> all;
 		for (const auto& addon : a_addons) {
+			if (addon) {
+				all.push_back(addon);
+			}
+		}
+		std::vector<std::ranges::range_value_t<Addons>> out;
+		for (const auto& addon : all) {
 			if (std::ranges::empty(a_races) || std::ranges::any_of(a_races, [&](const auto& a_race) { return a_fits(addon, a_race); })) {
 				out.push_back(addon);
 			}
 		}
-		if (out.empty()) {
-			out.assign(std::ranges::begin(a_addons), std::ranges::end(a_addons));
-		}
+		return out.empty() ? all : out;
+	}
+
+	template <std::size_t N>
+	[[nodiscard]] constexpr std::array<bool, N> AllOn() noexcept
+	{
+		std::array<bool, N> out{};
+		out.fill(true);
 		return out;
 	}
 
 	struct Settings
 	{
-		bool                      on{ true };
-		std::array<bool, kKinds>  kinds{ true, true, true, true, true };
-		bool                      natural{ false };
-		int                       brightness{ 100 };
-		int                       reach{ 100 };
-		bool                      flicker{ true };
-		bool                      deathFade{ true };
-		bool                      surge{ true };
-		std::array<bool, kOthers> theirs{};  // that mod's creatures keep its own light, ours off on them
+		bool                          on{ true };
+		std::array<bool, kKinds>      kinds{ true, true, true, true, true };
+		bool                          natural{ false };
+		int                           brightness{ 100 };
+		int                           reach{ 100 };
+		bool                          flicker{ true };
+		bool                          deathFade{ true };
+		bool                          surge{ true };
+		std::array<bool, kOthers>     theirs{};  // that mod's creatures keep its own light, ours off on them
+		std::array<bool, kExtraCount> extras{ AllOn<kExtraCount>() };
 	};
 
 	[[nodiscard]] inline bool ReadBool(std::string_view a_value, bool a_default)
@@ -577,6 +615,12 @@ namespace Anima
 					return true;
 				}
 			}
+			for (std::size_t i = 0; i < kExtraCount; ++i) {
+				if (SameText(a_key, kExtras[i])) {
+					a_s.extras[i] = ReadBool(a_value, a_s.extras[i]);
+					return true;
+				}
+			}
 			return false;
 		}
 	}
@@ -613,12 +657,16 @@ namespace Anima
 		for (std::size_t i = 0; i < kOthers; ++i) {
 			a_out << kOtherMods[i].key << '=' << (a_s.theirs[i] ? 1 : 0) << '\n';
 		}
+		for (std::size_t i = 0; i < kExtraCount; ++i) {
+			a_out << kExtras[i] << '=' << (a_s.extras[i] ? 1 : 0) << '\n';
+		}
 	}
 
-	// is this row lit at all with these settings (the lights' switch, its kind's switch, the natural-elements switch)
+	// is this row lit at all with these settings (the lights' switch, its kind's switch, the natural-elements switch, its own switch)
 	[[nodiscard]] inline bool Shown(const Row& a_row, const Settings& a_s) noexcept
 	{
-		return a_s.on && a_s.kinds[static_cast<std::size_t>(a_row.kind)] && (a_s.natural || !Natural(a_row.element));
+		return a_s.on && a_s.kinds[static_cast<std::size_t>(a_row.kind)] && (a_s.natural || !Natural(a_row.element)) &&
+		       (!a_row.extra || (*a_row.extra < kExtraCount && a_s.extras[*a_row.extra]));
 	}
 
 	// is a creature these mods light given back to them: to any one of them whose switch is on

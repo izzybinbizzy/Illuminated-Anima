@@ -3,7 +3,7 @@
 // GPL-3.0-or-later; see LICENSE.txt and the notice at the top of main.cpp.
 //
 // The SKSE Menu Framework page - every setting this mod has (settings live in the SKSE menu only). One page: what was found,
-// the lights' switch, the kinds, the one switch for elements that should not glow, Brightness, Reach, the three ways a
+// the lights' switch, the kinds, the one switch for elements that should not glow, the lights of their own switch, Brightness, Reach, the three ways a
 // light moves, and Their Own Lights - one switch per other creature lighting mod that is installed. A change is saved and
 // applied on the game's main thread when it is let go.
 
@@ -152,6 +152,17 @@ namespace Plugin
 			Field(T("Ice, wind, water and stone creatures"), &Anima::Settings::natural,
 				T("Creatures made of an element that would not really give off light (frost atronachs, ice wraiths, wind, water and stone "
 				  "creatures). Off by default for a realistic look."));
+			// each light of its own switch (Anima::kExtras, in that order): on by default, off here for a player who does not want it
+			constexpr std::array<std::array<const char*, 2>, Anima::kExtraCount> kExtraText{ {
+				{ TR_MARK("Dwarven Centurion steam"), TR_MARK("The steam a Dwarven Centurion breathes, and the steam spells that use it.") },
+			} };
+			for (std::size_t i = 0; i < Anima::kExtraCount; ++i) {
+				bool v = SettingsNow().extras[i];
+				if (Switch(T(kExtraText[i][0]), v, T(kExtraText[i][1]))) {
+					UpdateSettings([&](Anima::Settings& a_s) { a_s.extras[i] = v; });
+					Changed();
+				}
+			}
 
 			Header(Icon::kBulb, T("Strength"));
 			Percent(T("Brightness"), &Anima::Settings::brightness, Anima::kBrightnessMin, Anima::kBrightnessMax, T("How bright every creature's light is."));

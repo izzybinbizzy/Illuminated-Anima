@@ -22,12 +22,14 @@ namespace Plugin
 
 		std::vector<Anima::Row>                                                 gRows;
 		std::unordered_map<RE::TESRace*, std::vector<std::size_t>>              gByRace;
-		std::unordered_map<std::string, std::vector<std::size_t>>               gByModel;      // NormalPath -> rows
-		std::unordered_set<const RE::TESObjectARMO*>                            gRowSkins;     // every skin a character wears that holds a model of gByModel, or a row names
-		std::unordered_map<const RE::TESObjectARMO*, std::vector<std::size_t>>  gBySkin;       // a skin record a row names (skin=) -> rows
-		std::unordered_map<const RE::TESObjectARMO*, std::vector<RE::TESRace*>> gSkinRaces;    // every skin -> the races that wear it
-		std::unordered_map<std::string, Anima::Lighters>                        gClaims;       // a body model other mods' Light Placer files light -> every one of those mods
-		std::unordered_map<std::string, std::string>                            gClaimFolder;  // the same model -> the Light Placer folder of a mod we do not name
+		std::unordered_map<std::string, std::vector<std::size_t>>               gByModel;    // NormalPath -> rows
+		std::unordered_set<const RE::TESObjectARMO*>                            gRowSkins;   // every skin a character wears that holds a model of gByModel, or a row names
+		std::unordered_map<const RE::TESObjectARMO*, std::vector<std::size_t>>  gBySkin;     // a skin record a row names (skin=) -> rows
+		std::unordered_map<const RE::TESObjectARMO*, std::vector<RE::TESRace*>> gSkinRaces;  // every skin -> the races that wear it
+		// an ability whose constant effect plays a shader a row names (shader=, a ghost's look) -> those rows; written at data load only
+		std::vector<std::pair<const RE::SpellItem*, std::vector<std::size_t>>> gGhostSpells;
+		std::unordered_map<std::string, Anima::Lighters>                       gClaims;       // a body model other mods' Light Placer files light -> every one of those mods
+		std::unordered_map<std::string, std::string>                           gClaimFolder;  // the same model -> the Light Placer folder of a mod we do not name
 		// a Light Placer file, told by a light's own name: the mod it belongs to and the models it names
 		struct ClaimFile
 		{
@@ -91,6 +93,79 @@ namespace Plugin
 			}
 		}
 
+		// a see-through creature (the game's ghosts, a spirit summon) wears an ability whose constant effect plays a ghost shader: every
+		// such ability is found once, so an actor is matched by the abilities of its own spell list (his 573)
+		template <class OnBody>
+		void IndexGhosts(OnBody a_onBody)
+		{
+			std::unordered_map<const RE::TESEffectShader*, std::vector<std::size_t>> byShader;
+			for (std::size_t i = 0; i < gRows.size(); ++i) {
+				if (!a_onBody(gRows[i])) {
+					continue;
+				}
+				for (const auto& key : gRows[i].shaders) {
+					auto* form = FormOfKey(key);
+					if (const auto* shader = form ? form->As<RE::TESEffectShader>() : nullptr) {
+						byShader[shader].push_back(i);
+					}
+				}
+			}
+			if (byShader.empty()) {
+				return;
+			}
+			std::unordered_map<const RE::EffectSetting*, const std::vector<std::size_t>*> byEffect;
+			for (const auto* effect : LightKit::FormsOf<RE::EffectSetting>()) {
+				if (effect && effect->data.castingType == RE::MagicSystem::CastingType::kConstantEffect) {
+					if (const auto it = byShader.find(effect->data.effectShader); it != byShader.end()) {
+						byEffect.emplace(effect, &it->second);
+					}
+				}
+			}
+			for (const auto* spell : LightKit::FormsOf<RE::SpellItem>()) {
+				if (!spell || spell->GetSpellType() != RE::MagicSystem::SpellType::kAbility) {
+					continue;
+				}
+				std::vector<std::size_t> rows;
+				for (const auto* effect : spell->effects) {
+					const auto it = effect ? byEffect.find(effect->baseEffect) : byEffect.end();
+					if (it == byEffect.end()) {
+						continue;
+					}
+					for (const auto i : *it->second) {
+						if (std::ranges::find(rows, i) == rows.end()) {
+							rows.push_back(i);
+						}
+					}
+				}
+				if (!rows.empty()) {
+					gGhostSpells.emplace_back(spell, std::move(rows));
+				}
+			}
+			SKSE::log::info("creatures: {} ghost shader(s) named, {} effect(s) and {} abilit(ies) that play one", byShader.size(), byEffect.size(), gGhostSpells.size());
+		}
+
+		// the ghost rows of an actor whose own spell list holds such an ability (its base's, the copy the game made of a template's
+		// included); none for most characters, after a short look at their few abilities
+		[[nodiscard]] const std::vector<std::size_t>* GhostRowsOf(RE::Actor* a_actor)
+		{
+			if (gGhostSpells.empty()) {
+				return nullptr;
+			}
+			auto*       npc = a_actor->GetActorBase();
+			const auto* list = npc ? npc->actorEffects : nullptr;
+			if (!list || !list->spells) {
+				return nullptr;
+			}
+			for (std::uint32_t s = 0; s < list->numSpells; ++s) {
+				for (const auto& [spell, rows] : gGhostSpells) {
+					if (list->spells[s] == spell) {
+						return &rows;
+					}
+				}
+			}
+			return nullptr;
+		}
+
 		void IndexRows()
 		{
 			// the spell and burst rows light game records (SpellLights.cpp), never a creature's body
@@ -123,11 +198,14 @@ namespace Plugin
 				if (!a_skin) {
 					return;
 				}
+				// only a real race is a wearer: a null one would make AddonsWorn count every addon of the skin
 				auto& races = gSkinRaces[a_skin];
-				if (std::ranges::find(races, a_race) != races.end()) {
-					return;
+				if (a_race) {
+					if (std::ranges::find(races, a_race) != races.end()) {
+						return;
+					}
+					races.push_back(a_race);
 				}
-				races.push_back(a_race);
 				// wide on purpose: a creature whose race changes at run time still passes, and BodyModels takes its race's addons
 				for (auto* addon : a_skin->armorAddons) {
 					if (!addon) {
@@ -160,6 +238,7 @@ namespace Plugin
 					}
 				}
 			}
+			IndexGhosts(onBody);
 			SKSE::log::info("creatures: {} row(s), {} race(s) of this load order named, {} body model(s) named, {} skin record(s) named, on {} skin(s)",
 				gRows.size(), races, gByModel.size(), gBySkin.size(), gRowSkins.size());
 		}
@@ -282,9 +361,6 @@ namespace Plugin
 				const auto wearers = gSkinRaces.find(skin);
 				const auto worn = Anima::AddonsWorn(skin->armorAddons, wearers != gSkinRaces.end() ? wearers->second : std::vector<RE::TESRace*>{}, Wears);
 				for (auto* addon : worn) {
-					if (!addon) {
-						continue;
-					}
 					for (auto& model : addon->bipedModels) {
 						if (const char* path = model.GetModel(); path && *path) {
 							for (const auto i : rows) {
@@ -543,6 +619,7 @@ namespace Plugin
 		gRowSkins.clear();
 		gBySkin.clear();
 		gSkinRaces.clear();
+		gGhostSpells.clear();
 		gClaims.clear();
 		gClaimFolder.clear();
 		gClaimFiles.clear();
@@ -600,12 +677,16 @@ namespace Plugin
 			}
 		}
 		const auto race = gByRace.find(a_actor->GetRace());
-		return Anima::RowsFor(rows, race != gByRace.end() ? race->second : std::vector<std::size_t>{});
+		auto       out = Anima::RowsFor(rows, race != gByRace.end() ? race->second : std::vector<std::size_t>{});
+		if (const auto* ghost = GhostRowsOf(a_actor)) {
+			out = Anima::WithGhostRows(std::move(out), *ghost, [](std::size_t i) { return gRows[i].kind == Anima::Kind::kGlow; });
+		}
+		return out;
 	}
 
 	bool CouldLight(RE::Actor* a_actor)
 	{
-		return a_actor && (gByRace.contains(a_actor->GetRace()) || gRowSkins.contains(SkinOf(a_actor)));
+		return a_actor && (gByRace.contains(a_actor->GetRace()) || gRowSkins.contains(SkinOf(a_actor)) || GhostRowsOf(a_actor));
 	}
 
 	bool RowModelsLitByOthers(std::size_t a_row)
