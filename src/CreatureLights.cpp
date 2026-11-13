@@ -457,7 +457,8 @@ namespace Plugin
 			return rows;
 		}
 
-		void ApplyNotice(Lit& a_lit, float a_share, const Anima::Settings& a_s, bool a_snap);
+		void                             ApplyNotice(Lit& a_lit, float a_share, const Anima::Settings& a_s, bool a_snap);
+		[[nodiscard]] std::optional<int> AnnouncedState(RE::FormID a_id);
 
 		// lights this creature when a row names it and the settings show it; drops its lights when not. a_loading: the body its load
 		// just returned, which a queued load hands over before the game stores it
@@ -536,9 +537,12 @@ namespace Plugin
 				return;
 			}
 			auto& placed = gLit.emplace(id, std::move(lit)).first->second;
-			// dark until noticed: a creature lit in no fight starts dark (searching is not readable here, so it counts as calm)
-			if (a_s.noticed && !placed.dying && !a_actor->IsInCombat()) {
-				ApplyNotice(placed, 0.0f, a_s, true);
+			// dark until noticed: its lights start at the share its fight gives now - dark when calm, part way while it searches
+			if (a_s.noticed && !placed.dying) {
+				const auto state = Anima::StartState(AnnouncedState(id), a_actor->IsInCombat());
+				if (const float share = Anima::NoticeShare(state); share < 1.0f) {
+					ApplyNotice(placed, share, a_s, true);
+				}
 			}
 		}
 
@@ -722,10 +726,12 @@ namespace Plugin
 			if (a_lit.dying || a_share == a_lit.notice) {
 				return;
 			}
-			const float from = a_snap ? a_share : a_lit.notice;
+			const float known = a_snap ? a_share : a_lit.notice;
 			for (auto& one : a_lit.lights) {
-				const auto shape = ShapeOf(Rows()[one.row], a_s);
-				const auto keys = Anima::NoticeKeys(one.fade, shape, a_lit.seed, from, a_share);
+				// a change part way through an ease starts where the light is, never at the share it was heading for
+				const float from = a_snap || !one.light ? known : Anima::ShownShare(one.light->GetLightRuntimeData().fade, one.fade, known);
+				const auto  shape = ShapeOf(Rows()[one.row], a_s);
+				const auto  keys = Anima::NoticeKeys(one.fade, shape, a_lit.seed, from, a_share);
 				if (const auto played = MakeKeys(keys)) {
 					Play(one, played, keys.back().time, false);
 				} else if (one.light) {
@@ -768,6 +774,7 @@ namespace Plugin
 			std::vector<RE::FormID>                 cast;
 			std::vector<RE::FormID>                 calm;
 			std::vector<std::pair<RE::FormID, int>> notice;         // a combat state reached (0 none, 1 in combat, 2 searching): dark until noticed
+			std::unordered_map<RE::FormID, int>     states;         // each creature's last combat state but none, kept with nothing lit: where it starts
 			std::vector<RE::FormID>                 art;            // an art object started on it: another mod's light may hang on that
 			std::vector<std::uint32_t>              artOn, artOff;  // art effects whose art a row names: started, ended (their ids)
 			std::vector<ImpactOne>                  impactGone;     // an impact's light whose particle ended: taken off the scene here
@@ -780,6 +787,13 @@ namespace Plugin
 			std::atomic<bool>                                              any{ false };
 		};
 		Noted gNoted;
+
+		std::optional<int> AnnouncedState(RE::FormID a_id)
+		{
+			std::scoped_lock l{ gNoted.lock };
+			const auto       it = gNoted.states.find(a_id);
+			return it != gNoted.states.end() ? std::optional<int>{ it->second } : std::nullopt;
+		}
 
 		// art effects' ends are noted only while an art light of ours is up or one waits to be hung (main thread, after every relight)
 		void RearmArt()
@@ -1352,10 +1366,22 @@ namespace Plugin
 
 			RE::BSEventNotifyControl ProcessEvent(const RE::TESCombatEvent* a_event, RE::BSTEventSource<RE::TESCombatEvent>*) override
 			{
+				if (!a_event || !a_event->actor) {
+					return RE::BSEventNotifyControl::kContinue;
+				}
+				const auto state = a_event->newState.get();
+				const auto id = a_event->actor->GetFormID();
+				// kept with nothing lit too: a creature lit later starts at the state its fight is in
+				Guarded("combat state", [id, state]() {
+					std::scoped_lock l{ gNoted.lock };
+					if (state == RE::ACTOR_COMBAT_STATE::kNone) {
+						gNoted.states.erase(id);
+					} else {
+						gNoted.states.insert_or_assign(id, static_cast<int>(state));
+					}
+				});
 				// every state is noted for dark until noticed (the task reads whether it is on); a calm one also ends a cast's keys
-				if (!NothingLit() && a_event && a_event->actor) {
-					const auto state = a_event->newState.get();
-					const auto id = a_event->actor->GetFormID();
+				if (!NothingLit()) {
 					Note([id, state]() {
 						gNoted.notice.emplace_back(id, static_cast<int>(state));
 						if (state == RE::ACTOR_COMBAT_STATE::kNone) {
@@ -1450,6 +1476,7 @@ namespace Plugin
 			gNoted.cast.clear();
 			gNoted.calm.clear();
 			gNoted.notice.clear();
+			gNoted.states.clear();  // the old game's actors: a temporary form id comes back on another one
 			gNoted.art.clear();
 			gNoted.artOn.clear();
 			gNoted.artOff.clear();

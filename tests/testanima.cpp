@@ -32,7 +32,7 @@ namespace
 #define CHECK(x) Check((x), #x, __LINE__)
 
 	// the fewest checks a whole run makes (raise it when checks are added; lower it only when checks are removed on purpose)
-	constexpr int kFloor = 264 + FloorLightChecks::kCount + RowParkChecks::kCount;
+	constexpr int kFloor = 266 + FloorLightChecks::kCount + RowParkChecks::kCount;
 
 	[[nodiscard]] bool Near(float a, float b, float a_eps = 0.001f) { return std::fabs(a - b) <= a_eps; }
 
@@ -626,6 +626,11 @@ namespace
 		CHECK(std::ranges::all_of(dark, [](const Anima::Key& a_k) { return Near(a_k.value, 0.0f); }) && dark.back().time < 5.0f);
 		const auto flame = Anima::NoticeKeys(1.5f, Pulse::Kind::kFire, 7u, 0.0f, 1.0f);
 		CHECK(flame.back().time > Anima::kCastSeconds && Near(flame.front().value, 0.0f));
+		// a creature lit part way through its fight starts at the state the game last announced for it; a change part way through an ease
+		// starts at the share the light shows, and a light with no full fade answers the share it knew
+		CHECK(Anima::StartState(2, true) == 2 && Anima::StartState(std::nullopt, true) == 1 && Anima::StartState(std::nullopt, false) == 0);
+		CHECK(Near(Anima::ShownShare(0.3f, 1.5f, 1.0f), 0.2f) && Near(Anima::ShownShare(2.4f, 1.5f, 0.5f), 1.0f) &&
+			  Near(Anima::ShownShare(0.3f, 0.0f, 0.5f), 0.5f) && Near(Anima::ShownShare(std::nanf(""), 1.5f, 0.5f), 0.5f));
 	}
 }
 

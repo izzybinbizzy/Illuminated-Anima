@@ -879,6 +879,22 @@ namespace Anima
 		                                            0.0f;
 	}
 
+	// the combat state a creature's lights start at: the last one the game announced for it, else in a fight or not
+	[[nodiscard]] constexpr int StartState(std::optional<int> a_announced, bool a_inCombat) noexcept
+	{
+		return a_announced ? *a_announced : (a_inCombat ? 1 : 0);
+	}
+
+	// the share a light shows now (its fade over its full fade, kept to 0-1), so a change part way through an ease starts where the light
+	// is; with no full fade to read against it answers a_known
+	[[nodiscard]] inline float ShownShare(float a_fade, float a_full, float a_known) noexcept
+	{
+		if (!(a_full > 0.0f) || !std::isfinite(a_full) || !std::isfinite(a_fade)) {
+			return a_known;
+		}
+		return std::clamp(a_fade / a_full, 0.0f, 1.0f);
+	}
+
 	// a light's fade from a_from to a_to (shares of it), eased over the rise or the fall; with a flicker its keys go on at the new share for
 	// kCastSeconds. Played once: the last key holds, so the ramp never comes round again
 	[[nodiscard]] inline std::vector<Key> NoticeKeys(float a_fade, Pulse::Kind a_kind, std::uint32_t a_seed, float a_from, float a_to)
