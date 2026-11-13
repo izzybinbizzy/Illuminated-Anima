@@ -7,6 +7,7 @@
 
 #include "AnimaMath.h"
 #include "FloorLightChecks.h"
+#include "RowParkChecks.h"
 
 #include <cmath>
 #include <cstdio>
@@ -31,7 +32,7 @@ namespace
 #define CHECK(x) Check((x), #x, __LINE__)
 
 	// the fewest checks a whole run makes (raise it when checks are added; lower it only when checks are removed on purpose)
-	constexpr int kFloor = 246 + FloorLightChecks::kCount;
+	constexpr int kFloor = 256 + FloorLightChecks::kCount + RowParkChecks::kCount;
 
 	[[nodiscard]] bool Near(float a, float b, float a_eps = 0.001f) { return std::fabs(a - b) <= a_eps; }
 
@@ -104,11 +105,21 @@ namespace
 		CHECK(!sp.empty() && sp[0].kind == Anima::Kind::kBurst && sp[0].records.size() == 1 && sp[0].records[0] == "0x19531~Dragonborn.esm");
 		CHECK(!sp.empty() && Near(sp[0].size, 8.0f));
 
-		// a burst's 7.1 flash is kept, 99 stops at the top
-		std::istringstream strong("[creature]\nrace=X\nstrength=7.1\n[creature]\nrace=Y\nstrength=99\n");
-		std::size_t        sStrong = 0;
-		const auto         st = Anima::ReadCreatures(strong, sStrong);
-		CHECK(st.size() == 2 && sStrong == 0 && Near(st[0].strength, 7.1f) && Near(st[1].strength, 12.0f));
+		// an art row (a hit art, an enchantment's art) stands on its art= line alone; a burst's 7.1 flash is kept, 99 stops at the top
+		std::istringstream arts("[creature]\nkind=spell\nart=DLC01\\Effects\\SummonUndeadTarget.nif\nstrength=7.1\ncolor=97,78,255\n[creature]\nrace=X\nstrength=99\n");
+		std::size_t        s5 = 0;
+		const auto         ar = Anima::ReadCreatures(arts, s5);
+		CHECK(ar.size() == 2 && s5 == 0);
+		if (ar.size() == 2) {
+			CHECK(ar[0].arts.size() == 1 && ar[0].arts[0] == "dlc01\\effects\\summonundeadtarget.nif");
+			CHECK(ar[0].models.empty() && ar[0].records.empty());
+			CHECK(Near(ar[0].strength, 7.1f));
+			CHECK(Near(ar[1].strength, 12.0f));
+		}
+		std::istringstream impacts("[creature]\nkind=burst\nimpact=Data\\Meshes\\DLC02\\Effects\\DLC2HMDaedraImpact01.nif\ncolor=255,255,255\n");
+		std::size_t        sImpact = 0;
+		const auto         im = Anima::ReadCreatures(impacts, sImpact);
+		CHECK(im.size() == 1 && sImpact == 0 && im[0].impacts.size() == 1 && im[0].impacts[0] == "dlc02\\effects\\dlc2hmdaedraimpact01.nif");
 
 		// on a bone: one light per offset, or one on the bone itself; on a body without it: the row's points
 		std::istringstream bone("[creature]\nrace=X\nnode=FireAtronach_Spine2 [Spn2]\noffset=0,0,5.8\noffset=1,2,3\noffset=bad\npoint=0,-0.7,94.4\n[creature]\nrace=Y\nnode=Z\npoint=1,1,1\npoint=2,2,2\n");
@@ -227,6 +238,24 @@ namespace
 		CHECK(o.brightness == Anima::kBrightnessMax);
 		CHECK(o.reach == 100);
 		CHECK(!o.on);
+
+		// a creature's own switch: every creature is on until switched off; off ones go through the file one line each, and back on
+		// leaves no line (an older file with no such line reads with every creature on)
+		Anima::Settings c;
+		CHECK(Anima::CreatureOn(c, "Flame Atronach") && !c.creaturesOff);
+		Anima::SetCreatureOn(c, "Flame Atronach", false);
+		Anima::SetCreatureOn(c, "Wisp (Soul Cairn)", false);
+		CHECK(!Anima::CreatureOn(c, "Flame Atronach") && !Anima::CreatureOn(c, "Wisp (Soul Cairn)") && Anima::CreatureOn(c, "Spriggan"));
+		const auto         held = c.creaturesOff;
+		std::ostringstream cOut;
+		Anima::WriteSettings(c, cOut);
+		std::istringstream cIn(cOut.str());
+		Anima::Settings    cr;
+		Anima::ReadSettings(cIn, cr);
+		CHECK(!Anima::CreatureOn(cr, "Flame Atronach") && !Anima::CreatureOn(cr, "Wisp (Soul Cairn)") && Anima::CreatureOn(cr, "Spriggan"));
+		Anima::SetCreatureOn(c, "Flame Atronach", true);
+		Anima::SetCreatureOn(c, "Wisp (Soul Cairn)", true);
+		CHECK(!c.creaturesOff && held && held->size() == 2);  // a list already handed out never changes under its reader
 	}
 
 	void Showing()
@@ -245,6 +274,19 @@ namespace
 		s.kinds[0] = true;
 		s.on = false;
 		CHECK(!Anima::Shown(fire, s));
+
+		// a creature's own switch: its body rows (glow, eyes, machines) go off with it, a spell row of the same name does not; a row names
+		// its creature with creature=, else by its own name
+		std::istringstream named(
+			"[creature]\nname=Draugr eyes\nrace=DraugrRace\nkind=eyes\ncreature=Draugr\ncolor=80,218,255\n"
+			"[creature]\nname=Draugr\nrace=DraugrRace\ncolor=80,218,255\n"
+			"[creature]\nname=Draugr\nmodel=magic\\shout.nif\nkind=spell\ncolor=1,2,3\n");
+		std::size_t sNamed = 0;
+		const auto  nr = Anima::ReadCreatures(named, sNamed);
+		CHECK(nr.size() == 3 && nr[0].creature == "Draugr" && nr[1].creature == "Draugr");
+		Anima::Settings off;
+		Anima::SetCreatureOn(off, "Draugr", false);
+		CHECK(nr.size() == 3 && !Anima::Shown(nr[0], off) && !Anima::Shown(nr[1], off) && Anima::Shown(nr[2], off));
 
 		// a row of its own switch (his 575): read off switch=, shown only while that switch is on; a switch name no menu has leaves the row
 		// out (counted), so no light is left on with nothing to turn it off
@@ -267,6 +309,28 @@ namespace
 		Anima::Row stray;
 		stray.extra = Anima::kExtraCount;  // never made by the reader; a bad index lights nothing rather than reading past the switches
 		CHECK(!Anima::Shown(stray, Anima::Settings{}));
+
+		// a stream row (the beams and breaths StreamRows draws): read off stream= with its records; an unknown kind of row, or one that names no
+		// record, is left out and counted
+		std::istringstream streams(
+			"[creature]\nname=Bolt\nkind=spell\nstream=bolt\nrecord=0x4EFDF~Skyrim.esm\ncolor=81,111,255\n"
+			"[creature]\nname=Odd\nkind=spell\nstream=laser\nrecord=0x1~Skyrim.esm\ncolor=1,2,3\n"
+			"[creature]\nname=Bare\nkind=spell\nstream=spray\nmodel=magic\\x.nif\ncolor=1,2,3\n");
+		std::size_t sStream = 0;
+		const auto  sr = Anima::ReadCreatures(streams, sStream);
+		CHECK(sr.size() == 1 && sStream == 2);
+		CHECK(!sr.empty() && sr[0].stream == Anima::Stream::kBolt && sr[0].records.size() == 1);
+
+		// a moved row (lit by Illuminated / RELight before 1.1): moved=yes marks it, any other value leaves the row out (counted), and a row
+		// without the line is not moved
+		std::istringstream movedIn(
+			"[creature]\nname=Moved\nmodel=magic\\a.nif\nkind=burst\nmoved=yes\ncolor=1,2,3\n"
+			"[creature]\nname=Typo\nmodel=magic\\b.nif\nkind=burst\nmoved=yse\ncolor=1,2,3\n"
+			"[creature]\nname=Own\nmodel=magic\\c.nif\nkind=burst\ncolor=1,2,3\n");
+		std::size_t sMoved = 0;
+		const auto  mv = Anima::ReadCreatures(movedIn, sMoved);
+		CHECK(mv.size() == 2 && sMoved == 1);
+		CHECK(mv.size() == 2 && mv[0].moved && !mv[1].moved);
 
 		// a ghost row (his 573): read off shader= alone, it names a creature; it joins only a creature with no glow of its own
 		std::istringstream ghost("[creature]\nname=Ghost\nshader=0x3B6CB~Skyrim.esm\nelement=spirit\ncolor=114,170,255\npoint=0,0,64\n");
@@ -553,6 +617,7 @@ int main()
 	OverTime();
 	Keys();
 	FloorLightChecks::Run(Check);
+	RowParkChecks::Run(Check);
 	std::printf("%d passed, %d failed\n", gPassed, gFailed);
 	if (gPassed + gFailed < kFloor) {
 		std::printf("FAIL: only %d checks ran, fewer than the floor %d\n", gPassed + gFailed, kFloor);

@@ -21,6 +21,8 @@ namespace Plugin
 		constexpr const char* kFolder = "Data/SKSE/Plugins/IlluminatedCreatureLightingNG/Creatures";
 
 		std::vector<Anima::Row>                                                 gRows;
+		std::vector<CreatureGroup>                                              gCreatureList;  // written once at data load, read after
+		std::atomic<bool>                                                       gCreatureListReady{ false };
 		std::unordered_map<RE::TESRace*, std::vector<std::size_t>>              gByRace;
 		std::unordered_map<std::string, std::vector<std::size_t>>               gByModel;    // NormalPath -> rows
 		std::unordered_set<const RE::TESObjectARMO*>                            gRowSkins;   // every skin a character wears that holds a model of gByModel, or a row names
@@ -85,12 +87,46 @@ namespace Plugin
 				auto          rows = Anima::ReadCreatures(in, skipped);
 				SKSE::log::info("creatures file {}: {} creature(s){}", Utf8(path.filename()), rows.size(),
 					skipped ? std::format(", {} block(s) left out (no creature named, or a color that does not read)", skipped) : "");
+				// the menu groups creatures by the file they come from, its name up to " - " ("Skyrim - Eyes and Machines" joins "Skyrim")
+				const auto stem = Utf8(path.stem());
+				const auto group = stem.substr(0, stem.find(" - "));
+				for (auto& row : rows) {
+					row.group = group;
+				}
 				std::ranges::move(rows, std::back_inserter(gRows));
 				++gFiles;
 			}
 			if (files.empty()) {
 				SKSE::log::warn("no creatures file in {} - nothing is lit", kFolder);
 			}
+			// a row moved from Illuminated / RELight in the release they drop it is left to an older one still loaded: a player who
+			// updates the mods apart keeps the look they had, never two lights on one thing
+			if (OlderCarrierLoaded()) {
+				const auto before = gRows.size();
+				std::erase_if(gRows, [](const Anima::Row& a_row) { return a_row.moved; });
+				SKSE::log::info("creatures files: {} moved row(s) left to the older Illuminated / RELight loaded", before - gRows.size());
+			}
+			// the menu's creature switches, one per creature a body row lights, in the files' order of groups, sorted inside each
+			gCreatureListReady.store(false, std::memory_order_release);
+			gCreatureList.clear();
+			for (const auto& row : gRows) {
+				if (!Anima::OnThePicker(row.kind)) {
+					continue;
+				}
+				const bool listed = std::ranges::any_of(gCreatureList, [&](const auto& a_g) { return std::ranges::find(a_g.second, row.creature) != a_g.second.end(); });
+				if (listed) {
+					continue;
+				}
+				auto group = std::ranges::find(gCreatureList, row.group, &CreatureGroup::first);
+				if (group == gCreatureList.end()) {
+					group = gCreatureList.insert(gCreatureList.end(), { row.group, {} });
+				}
+				group->second.push_back(row.creature);
+			}
+			for (auto& [name, creatures] : gCreatureList) {
+				std::ranges::sort(creatures);
+			}
+			gCreatureListReady.store(true, std::memory_order_release);
 		}
 
 		// a see-through creature (the game's ghosts, a spirit summon) wears an ability whose constant effect plays a ghost shader: every
@@ -906,4 +942,11 @@ namespace Plugin
 
 	std::size_t CreatureRowCount() { return gRows.size(); }
 	std::size_t FilesRead() { return gFiles; }
+
+	const std::vector<CreatureGroup>& CreatureList()
+	{
+		// devbench may ask from its own thread while data load still builds the list: empty until it is whole, fixed after
+		static const std::vector<CreatureGroup> none;
+		return gCreatureListReady.load(std::memory_order_acquire) ? gCreatureList : none;
+	}
 }

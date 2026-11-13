@@ -37,6 +37,13 @@ namespace Plugin
 		};
 		std::vector<Target> gTargets;
 
+		// an art object a row names by its model, hung on as its effect starts (CreatureLights.cpp); written at data load before any hook goes in
+		std::unordered_map<const RE::BGSArtObject*, std::size_t> gArts;
+		// an impact record a row names by its model, and the row: a short list, read by a hook every particle passes (one compare each)
+		std::vector<std::pair<const RE::BGSImpactData*, std::size_t>> gImpacts;
+		// the same rows by their model's file name, lower case: a magic impact's particle holds no impact record, only its model name
+		std::vector<std::pair<std::string, std::size_t>> gImpactNames;
+
 		constexpr const char*       kReLightConfigs = "Data/SKSE/Plugins/ReLight/Configs";
 		constexpr std::wstring_view kOurFolder = L"illuminated creature lighting ng";  // ours, under kReLightConfigs (lower case)
 
@@ -224,6 +231,53 @@ namespace Plugin
 				gTargets.push_back({ &a_slot, a_slot, ours, a_row, a_record, a_model, false });
 			}
 		}
+
+		// the art objects the rows' art= lines name: a hit art or an enchantment's art carries no light record, so a light of ours hangs on it
+		void ReadArts()
+		{
+			gArts.clear();
+			gImpacts.clear();
+			gImpactNames.clear();
+			const auto&                                  rows = Rows();
+			std::unordered_map<std::string, std::size_t> byModel, byImpact;
+			for (std::size_t i = 0; i < rows.size(); ++i) {
+				if (rows[i].kind == Anima::Kind::kSpell || rows[i].kind == Anima::Kind::kBurst) {
+					for (const auto& model : rows[i].arts) {
+						if (const auto [at, added] = byModel.try_emplace(model, i); !added) {
+							SKSE::log::info("creature spells: {} names art {} that {} names already - the first row lights it", rows[i].name, model, rows[at->second].name);
+						}
+					}
+					for (const auto& model : rows[i].impacts) {
+						if (const auto [at, added] = byImpact.try_emplace(model, i); !added) {
+							SKSE::log::info("creature spells: {} names impact {} that {} names already - the first row lights it", rows[i].name, model, rows[at->second].name);
+						}
+					}
+				}
+			}
+			if (!byImpact.empty()) {
+				for (const auto& [model, row] : byImpact) {
+					const auto cut = model.find_last_of("\\/");
+					gImpactNames.emplace_back(cut == std::string::npos ? model : model.substr(cut + 1), row);
+				}
+				for (const auto* impact : LightKit::FormsOf<RE::BGSImpactData>()) {
+					const char* model = impact ? impact->GetModel() : nullptr;
+					if (const auto it = model && *model ? byImpact.find(Anima::NormalPath(model)) : byImpact.end(); it != byImpact.end()) {
+						gImpacts.emplace_back(impact, it->second);
+					}
+				}
+				SKSE::log::info("creature spells: {} impact record(s) lit as their splash plays", gImpacts.size());
+			}
+			if (byModel.empty()) {
+				return;
+			}
+			for (const auto* art : LightKit::FormsOf<RE::BGSArtObject>()) {
+				const char* model = art ? art->GetModel() : nullptr;
+				if (const auto it = model && *model ? byModel.find(Anima::NormalPath(model)) : byModel.end(); it != byModel.end()) {
+					gArts.try_emplace(art, it->second);
+				}
+			}
+			SKSE::log::info("creature spells: {} art object(s) lit as their effects start", gArts.size());
+		}
 	}
 
 	void ReadSpellRecords()
@@ -232,7 +286,8 @@ namespace Plugin
 		const auto&                                  rows = Rows();
 		std::unordered_map<std::string, std::size_t> byModel;
 		for (std::size_t i = 0; i < rows.size(); ++i) {
-			if (rows[i].kind != Anima::Kind::kSpell && rows[i].kind != Anima::Kind::kBurst) {
+			// a stream row is drawn by StreamRows (Streams.cpp): its projectiles keep their own light
+			if ((rows[i].kind != Anima::Kind::kSpell && rows[i].kind != Anima::Kind::kBurst) || rows[i].stream != Anima::Stream::kNone) {
 				continue;
 			}
 			for (const auto& model : rows[i].models) {
@@ -248,11 +303,30 @@ namespace Plugin
 			const auto it = byModel.find(Anima::NormalPath(a_model));
 			return it != byModel.end() ? std::optional<std::size_t>(it->second) : std::nullopt;
 		};
+		// a projectile a stream row claims keeps its own light whatever another row names it by, record or model: a row and our record
+		// light on one breath would light it twice
+		std::unordered_set<const RE::BGSProjectile*> streamed;
+		for (const auto& row : rows) {
+			if (row.stream != Anima::Stream::kNone) {
+				for (const auto& key : row.records) {
+					auto* form = FormOfKey(key);
+					if (const auto* p = form ? form->As<RE::BGSProjectile>() : nullptr) {
+						streamed.insert(p);
+					}
+				}
+			}
+		}
 		// the records named by form first: they win over a model shared with other records
 		for (std::size_t i = 0; i < rows.size(); ++i) {
+			if (rows[i].stream != Anima::Stream::kNone) {
+				continue;
+			}
 			for (const auto& key : rows[i].records) {
 				auto* form = FormOfKey(key);
 				if (auto* p = form ? form->As<RE::BGSProjectile>() : nullptr) {
+					if (streamed.contains(p)) {
+						continue;  // drawn by its stream row, which keeps the projectile's own light
+					}
 					Add(p->data.light, i, white, p, p->GetModel());
 				} else if (auto* e = form ? form->As<RE::BGSExplosion>() : nullptr) {
 					Add(e->data.light, i, white, e, e->GetModel());
@@ -268,7 +342,7 @@ namespace Plugin
 		}
 		if (!byModel.empty()) {
 			for (auto* p : LightKit::FormsOf<RE::BGSProjectile>()) {
-				if (const auto r = p ? rowOf(p->GetModel()) : std::nullopt) {
+				if (const auto r = p && !streamed.contains(p) ? rowOf(p->GetModel()) : std::nullopt) {
 					Add(p->data.light, *r, white, p, p->GetModel());
 				}
 			}
@@ -291,7 +365,52 @@ namespace Plugin
 			}
 		}
 		SKSE::log::info("creature spells: {} record(s) given a light of ours", gTargets.size());
+		ReadArts();
 		FindFileRows();
+	}
+
+	std::optional<std::size_t> ArtRow(const RE::BGSArtObject* a_art)
+	{
+		const auto it = a_art ? gArts.find(a_art) : gArts.end();
+		return it != gArts.end() ? std::optional<std::size_t>(it->second) : std::nullopt;
+	}
+
+	bool AnyArtRows()
+	{
+		return !gArts.empty();
+	}
+
+	std::optional<std::size_t> ImpactRow(const RE::BGSImpactData* a_impact)
+	{
+		for (const auto& [impact, row] : gImpacts) {
+			if (impact == a_impact) {
+				return row;
+			}
+		}
+		return std::nullopt;
+	}
+
+	bool AnyImpactRows()
+	{
+		return !gImpacts.empty() || !gImpactNames.empty();
+	}
+
+	std::optional<std::size_t> ImpactRowByModel(const char* a_model)
+	{
+		if (!a_model || gImpactNames.empty()) {
+			return std::nullopt;
+		}
+		const std::string_view model(a_model);
+		const auto             cut = model.find_last_of("\\/");
+		const auto             name = cut == std::string_view::npos ? model : model.substr(cut + 1);
+		for (const auto& [tail, row] : gImpactNames) {
+			if (name.size() == tail.size() && std::ranges::equal(name, tail, [](char a_a, char a_b) {
+					return std::tolower(static_cast<unsigned char>(a_a)) == static_cast<unsigned char>(a_b);
+				})) {
+				return row;
+			}
+		}
+		return std::nullopt;
 	}
 
 	void ApplySpellRecords(const Anima::Settings& a_s)

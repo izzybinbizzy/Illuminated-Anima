@@ -15,10 +15,13 @@
 #include <charconv>
 #include <cmath>
 #include <cstdint>
+#include <functional>
 #include <istream>
+#include <memory>
 #include <optional>
 #include <ostream>
 #include <ranges>
+#include <set>
 #include <string>
 #include <string_view>
 #include <vector>
@@ -40,6 +43,17 @@ namespace Anima
 	};
 	inline constexpr std::size_t                          kKinds = 5;
 	inline constexpr std::array<std::string_view, kKinds> kKindNames{ "glow", "spell", "burst", "eyes", "machines" };
+
+	// a row of lights along a beam or a breath (stream=): drawn by the shared StreamRows module along its records' projectiles, never
+	// through their light slot (each projectile keeps its own light, as in Illuminated)
+	enum class Stream : std::uint8_t
+	{
+		kNone,
+		kBolt,   // along its model, to where it hits
+		kSpray,  // a flame spray or a cone, along its aim
+		kCloud,  // one light where a cone's cloud is
+	};
+	inline constexpr std::array<std::string_view, 3> kStreamNames{ "bolt", "spray", "cloud" };
 
 	// a creature row's line on Illuminated's or RELight's Choose Your Own Color page; a spell or burst row lights a record, not a creature
 	[[nodiscard]] constexpr bool OnThePicker(Kind a_kind) noexcept
@@ -134,17 +148,23 @@ namespace Anima
 		Rgb                        rgb{ 255, 255, 255 };
 		float                      reach{ 256.0f };
 		float                      strength{ 1.0f };
-		bool                       ember{ false };  // a small light stays on its remains after the death fade
-		std::vector<std::string>   records;         // a spell or burst row: the game records it lights, "0x<id>~<plugin>"
-		float                      size{ 2.0f };    // an inverse-square light's size (Community Shaders)
-		std::vector<std::string>   skins;           // skin records, "0x<id>~<plugin>": two looks of one body model told apart by the skin worn
-		std::vector<std::string>   shaders;         // effect shaders, "0x<id>~<plugin>": a see-through creature whose own ability plays one (a ghost)
-		std::optional<std::size_t> extra;           // a light of its own switch (switch=, kExtras): the menu turns it off apart from its kind
+		bool                       ember{ false };           // a small light stays on its remains after the death fade
+		std::vector<std::string>   records;                  // a spell or burst row: the game records it lights, "0x<id>~<plugin>"
+		float                      size{ 2.0f };             // an inverse-square light's size (Community Shaders)
+		std::vector<std::string>   skins;                    // skin records, "0x<id>~<plugin>": two looks of one body model told apart by the skin worn
+		std::vector<std::string>   shaders;                  // effect shaders, "0x<id>~<plugin>": a see-through creature whose own ability plays one (a ghost)
+		std::vector<std::string>   arts;                     // a spell or burst row: art objects it lights by their model (a hit art, an enchantment's art), NormalPath
+		std::vector<std::string>   impacts;                  // a burst row: impact records it lights by their model (an impact's splash), NormalPath
+		std::optional<std::size_t> extra;                    // a light of its own switch (switch=, kExtras): the menu turns it off apart from its kind
+		Stream                     stream{ Stream::kNone };  // stream=: a row of lights along its records' projectiles (StreamRows)
+		bool                       moved{ false };           // moved=yes: Illuminated / RELight lit it before; left to an older one still loaded
+		std::string                creature;                 // the creature as a player knows it, for its menu switch (creature=, else the row's name)
+		std::string                group;                    // its menu group: the creatures file it came from (the caller fills it)
 	};
 
 	// the lights a player can turn off on their own, each a switch in the menu, on by default (his 575: "make these toggles like the configs
 	// we have for illuminated in case users dont want them"); a row names one with switch=<key>. Menu.cpp holds each one's text
-	inline constexpr std::array<std::string_view, 1> kExtras{ "CenturionSteam" };
+	inline constexpr std::array<std::string_view, 2> kExtras{ "CenturionSteam", "AshHand" };
 	inline constexpr std::size_t                     kExtraCount = kExtras.size();
 
 	// a model path as compared everywhere: lower case, backslashes, no leading "meshes\" or "data\meshes\"
@@ -270,6 +290,25 @@ namespace Anima
 				a_row.skins.emplace_back(a_value);
 			} else if (key == "shader") {
 				a_row.shaders.emplace_back(a_value);
+			} else if (key == "stream") {
+				// an unknown kind of row would draw nothing: the row is left out and counted
+				const auto i = IndexOf(kStreamNames, a_value);
+				if (!i) {
+					return false;
+				}
+				a_row.stream = static_cast<Stream>(*i + 1);
+			} else if (key == "creature") {
+				a_row.creature = std::string(a_value);
+			} else if (key == "moved") {
+				// only "yes": a misspelt value would light a moved row beside the older carrier that still lights it
+				if (!SameText(a_value, "yes")) {
+					return false;
+				}
+				a_row.moved = true;
+			} else if (key == "art") {
+				a_row.arts.push_back(NormalPath(a_value));
+			} else if (key == "impact") {
+				a_row.impacts.push_back(NormalPath(a_value));
 			} else if (key == "size") {
 				if (const auto n = Numbers(a_value, 1); n && n->size() == 1) {
 					a_row.size = std::clamp((*n)[0], 0.5f, 8.0f);
@@ -295,11 +334,16 @@ namespace Anima
 		std::optional<Row> row;
 		bool               ok = true;
 		const auto         finish = [&]() {
-			if (row && ((row->races.empty() && row->models.empty() && row->records.empty() && row->skins.empty() && row->shaders.empty()) || !ok)) {
+			// a stream row draws only along the projectiles its records name
+			if (row && ((row->races.empty() && row->models.empty() && row->records.empty() && row->skins.empty() && row->shaders.empty() && row->arts.empty() && row->impacts.empty()) ||
+						   (row->stream != Stream::kNone && row->records.empty()) || !ok)) {
 				++a_skipped;
 			} else if (row) {
 				if (row->points.empty()) {
 					row->points.push_back({});
+				}
+				if (row->creature.empty()) {
+					row->creature = row->name;
 				}
 				rows.push_back(std::move(*row));
 			}
@@ -565,7 +609,31 @@ namespace Anima
 		bool                          surge{ true };
 		std::array<bool, kOthers>     theirs{};  // that mod's creatures keep its own light, ours off on them
 		std::array<bool, kExtraCount> extras{ AllOn<kExtraCount>() };
+		// the creatures switched off one by one in the menu (by their creature name); shared, so copying the settings stays cheap
+		std::shared_ptr<const std::set<std::string, std::less<>>> creaturesOff;
 	};
+
+	// a creature's own menu switch: on unless the menu switched it off
+	[[nodiscard]] inline bool CreatureOn(const Settings& a_s, std::string_view a_creature)
+	{
+		return !a_s.creaturesOff || !a_s.creaturesOff->contains(a_creature);
+	}
+
+	// switches one creature on or off: a new list each time, so a copy already handed out never changes under its reader
+	inline void SetCreatureOn(Settings& a_s, std::string_view a_creature, bool a_on)
+	{
+		if (a_creature.empty() || CreatureOn(a_s, a_creature) == a_on) {
+			return;
+		}
+		auto next = a_s.creaturesOff ? std::make_shared<std::set<std::string, std::less<>>>(*a_s.creaturesOff) :
+		                               std::make_shared<std::set<std::string, std::less<>>>();
+		if (a_on) {
+			next->erase(next->find(a_creature));
+		} else {
+			next->emplace(a_creature);
+		}
+		a_s.creaturesOff = next->empty() ? nullptr : std::move(next);
+	}
 
 	[[nodiscard]] inline bool ReadBool(std::string_view a_value, bool a_default)
 	{
@@ -625,6 +693,10 @@ namespace Anima
 					return true;
 				}
 			}
+			if (SameText(a_key, "CreatureOff")) {
+				SetCreatureOn(a_s, a_value, false);
+				return !a_value.empty();
+			}
 			return false;
 		}
 	}
@@ -664,13 +736,21 @@ namespace Anima
 		for (std::size_t i = 0; i < kExtraCount; ++i) {
 			a_out << kExtras[i] << '=' << (a_s.extras[i] ? 1 : 0) << '\n';
 		}
+		// one line per creature switched off; a creature with no line is on, so an older file reads unchanged
+		if (a_s.creaturesOff) {
+			for (const auto& creature : *a_s.creaturesOff) {
+				a_out << "CreatureOff=" << creature << '\n';
+			}
+		}
 	}
 
-	// is this row lit at all with these settings (the lights' switch, its kind's switch, the natural-elements switch, its own switch)
-	[[nodiscard]] inline bool Shown(const Row& a_row, const Settings& a_s) noexcept
+	// is this row lit at all with these settings (the lights' switch, its kind's switch, the natural-elements switch, its own switch, and
+	// for a creature's own light, that creature's switch)
+	[[nodiscard]] inline bool Shown(const Row& a_row, const Settings& a_s)
 	{
 		return a_s.on && a_s.kinds[static_cast<std::size_t>(a_row.kind)] && (a_s.natural || !Natural(a_row.element)) &&
-		       (!a_row.extra || (*a_row.extra < kExtraCount && a_s.extras[*a_row.extra]));
+		       (!a_row.extra || (*a_row.extra < kExtraCount && a_s.extras[*a_row.extra])) &&
+		       (!OnThePicker(a_row.kind) || CreatureOn(a_s, a_row.creature));
 	}
 
 	// is a creature these mods light given back to them: to any one of them whose switch is on
