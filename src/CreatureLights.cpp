@@ -66,8 +66,6 @@ namespace Plugin
 		std::atomic<std::uint32_t> gHungAgain{ 0 };
 		// how many casting lights a creature left up as its 3D went were put out (the game check for his 580); main thread only
 		std::atomic<std::uint32_t> gCastLightsOut{ 0 };
-		// the game's main thread, read where the hooks go in (data load): a caster's light is copied only there, where the game writes it
-		std::atomic<std::uint32_t> gMainThread{ 0 };
 
 		// the light limit is Light Limit Fix's, linear or inverse square alike
 		[[nodiscard]] std::size_t Cap() { return LightLimitFix() ? kCapShaders : kCapPlain; }
@@ -776,6 +774,12 @@ namespace Plugin
 			static inline REL::Relocation<decltype(thunk)> func;
 		};
 
+		// whether any of its casters still holds a light: the slots read straight off the actor, no caster made (the plugin framework section 2)
+		[[nodiscard]] bool HasCastLight(RE::Character* a_actor)
+		{
+			return std::ranges::any_of(a_actor->GetActorRuntimeData().magicCasters, [](const auto* a_caster) { return a_caster && a_caster->light; });
+		}
+
 		// a creature of ours whose 3D goes while a caster still holds its casting light: each such light noted with it, put out on the main thread
 		void NoteCastLights(RE::Character* a_actor)
 		{
@@ -808,9 +812,10 @@ namespace Plugin
 					const auto id = a_this->GetFormID();
 					Note([id, on]() { gNoted.loaded.push_back({ id, on, {} }); });
 				}
-				// a casting light still up as a creature of ours goes is the game's leftover (his 580): looked for only with a light of ours in the
-				// scene (one relaxed read first, as the hook's idle path), and on the main thread, where the game writes a caster's light
-				if (!on && !NothingLit() && REX::W32::GetCurrentThreadId() == gMainThread.load(std::memory_order_relaxed) && CouldLight(a_this)) {
+				// a casting light still up as a creature of ours goes is the game's leftover (his 580): the caster slots' light pointers are read
+				// first (a few reads, the hook's idle path), the creature tables only for a body that leaves one up. Disable's 3D release runs off
+				// the main thread, so the light is taken here (the 1.0 game check: gated to the main thread, the matron's glow stayed)
+				if (!on && HasCastLight(a_this) && CouldLight(a_this)) {
 					Guarded("cast light at a body's end", [a_this]() { NoteCastLights(a_this); });
 				}
 			}
@@ -936,7 +941,6 @@ namespace Plugin
 		if (auto* ui = RE::UI::GetSingleton()) {
 			ui->AddEventSink<RE::MenuOpenCloseEvent>(&events);
 		}
-		gMainThread = REX::W32::GetCurrentThreadId();
 		REL::Relocation<std::uintptr_t> vtbl{ RE::Character::VTABLE[0] };
 		Load3D::func = vtbl.write_vfunc(0x6A, Load3D::thunk);
 		Set3D::func = vtbl.write_vfunc(0x6C, Set3D::thunk);
