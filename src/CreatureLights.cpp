@@ -66,6 +66,8 @@ namespace Plugin
 		std::atomic<std::uint32_t> gHungAgain{ 0 };
 		// how many casting lights a creature left up as its 3D went were put out (the game check for his 580); main thread only
 		std::atomic<std::uint32_t> gCastLightsOut{ 0 };
+		// the game's main thread, read where the hooks go in (data load): a caster's light is copied only there, where the game writes it
+		std::atomic<std::uint32_t> gMainThread{ 0 };
 
 		// the light limit is Light Limit Fix's, linear or inverse square alike
 		[[nodiscard]] std::size_t Cap() { return LightLimitFix() ? kCapShaders : kCapPlain; }
@@ -636,7 +638,11 @@ namespace Plugin
 		{
 			auto* actor = RE::TESForm::LookupByID<RE::Actor>(a_id);
 			if (actor && actor->Is3DLoaded()) {
-				return;  // its body came back before this task ran: the light is the game's again
+				// its body came back before this task ran: a light a caster still holds is the game's again, one none holds is left over
+				const auto& casters = actor->GetActorRuntimeData().magicCasters;
+				if (std::ranges::any_of(casters, [&](auto* a_caster) { return a_caster && a_caster->light.get() == a_bs.get(); })) {
+					return;
+				}
 			}
 			LightKit::TakeOff(LightKit::Scene(), a_bs);
 			++gCastLightsOut;
@@ -802,8 +808,9 @@ namespace Plugin
 					const auto id = a_this->GetFormID();
 					Note([id, on]() { gNoted.loaded.push_back({ id, on, {} }); });
 				}
-				// a casting light still up as a creature of ours goes is the game's leftover (his 580); its casters are read only then
-				if (!on && a_this && CouldLight(a_this)) {
+				// a casting light still up as a creature of ours goes is the game's leftover (his 580): looked for only with a light of ours in the
+				// scene (one relaxed read first, as the hook's idle path), and on the main thread, where the game writes a caster's light
+				if (!on && !NothingLit() && REX::W32::GetCurrentThreadId() == gMainThread.load(std::memory_order_relaxed) && CouldLight(a_this)) {
 					Guarded("cast light at a body's end", [a_this]() { NoteCastLights(a_this); });
 				}
 			}
@@ -929,6 +936,7 @@ namespace Plugin
 		if (auto* ui = RE::UI::GetSingleton()) {
 			ui->AddEventSink<RE::MenuOpenCloseEvent>(&events);
 		}
+		gMainThread = REX::W32::GetCurrentThreadId();
 		REL::Relocation<std::uintptr_t> vtbl{ RE::Character::VTABLE[0] };
 		Load3D::func = vtbl.write_vfunc(0x6A, Load3D::thunk);
 		Set3D::func = vtbl.write_vfunc(0x6C, Set3D::thunk);

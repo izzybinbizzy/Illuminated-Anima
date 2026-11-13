@@ -277,7 +277,11 @@ namespace Anima
 			} else if (key == "ember") {
 				a_row.ember = SameText(a_value, "yes") || a_value == "1" || SameText(a_value, "true");
 			} else if (key == "switch") {
+				// a switch no menu has would leave the row lit with nothing to turn it off: the row is left out and counted instead
 				a_row.extra = IndexOf(kExtras, a_value);
+				if (!a_row.extra) {
+					return false;
+				}
 			}
 			return true;
 		}

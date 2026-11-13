@@ -27,9 +27,9 @@ namespace Plugin
 		std::unordered_map<const RE::TESObjectARMO*, std::vector<std::size_t>>  gBySkin;     // a skin record a row names (skin=) -> rows
 		std::unordered_map<const RE::TESObjectARMO*, std::vector<RE::TESRace*>> gSkinRaces;  // every skin -> the races that wear it
 		// an ability whose constant effect plays a shader a row names (shader=, a ghost's look) -> those rows; written at data load only
-		std::vector<std::pair<const RE::SpellItem*, std::vector<std::size_t>>> gGhostSpells;
-		std::unordered_map<std::string, Anima::Lighters>                       gClaims;       // a body model other mods' Light Placer files light -> every one of those mods
-		std::unordered_map<std::string, std::string>                           gClaimFolder;  // the same model -> the Light Placer folder of a mod we do not name
+		std::unordered_map<const RE::SpellItem*, std::vector<std::size_t>> gGhostSpells;
+		std::unordered_map<std::string, Anima::Lighters>                   gClaims;       // a body model other mods' Light Placer files light -> every one of those mods
+		std::unordered_map<std::string, std::string>                       gClaimFolder;  // the same model -> the Light Placer folder of a mod we do not name
 		// a Light Placer file, told by a light's own name: the mod it belongs to and the models it names
 		struct ClaimFile
 		{
@@ -138,7 +138,7 @@ namespace Plugin
 					}
 				}
 				if (!rows.empty()) {
-					gGhostSpells.emplace_back(spell, std::move(rows));
+					gGhostSpells.emplace(spell, std::move(rows));
 				}
 			}
 			SKSE::log::info("creatures: {} ghost shader(s) named, {} effect(s) and {} abilit(ies) that play one", byShader.size(), byEffect.size(), gGhostSpells.size());
@@ -157,10 +157,8 @@ namespace Plugin
 				return nullptr;
 			}
 			for (std::uint32_t s = 0; s < list->numSpells; ++s) {
-				for (const auto& [spell, rows] : gGhostSpells) {
-					if (list->spells[s] == spell) {
-						return &rows;
-					}
+				if (const auto it = gGhostSpells.find(list->spells[s]); it != gGhostSpells.end()) {
+					return &it->second;
 				}
 			}
 			return nullptr;

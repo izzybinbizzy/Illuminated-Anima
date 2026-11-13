@@ -246,19 +246,20 @@ namespace
 		s.on = false;
 		CHECK(!Anima::Shown(fire, s));
 
-		// a row of its own switch (his 575): read off switch=, shown only while that switch is on; an unknown switch name is no switch
+		// a row of its own switch (his 575): read off switch=, shown only while that switch is on; a switch name no menu has leaves the row
+		// out (counted), so no light is left on with nothing to turn it off
 		std::istringstream steam(
 			"[creature]\nname=Steam\nmodel=magic\\steam.nif\nkind=spell\nelement=fire\nswitch=CenturionSteam\ncolor=255,133,75\n"
 			"[creature]\nname=Odd\nmodel=magic\\odd.nif\nkind=spell\nelement=fire\nswitch=NoSuchSwitch\ncolor=1,2,3\n");
 		std::size_t skipped = 0;
 		const auto  rows = Anima::ReadCreatures(steam, skipped);
-		CHECK(rows.size() == 2 && skipped == 0);
-		if (rows.size() == 2) {
-			CHECK(rows[0].extra == std::optional<std::size_t>(0) && !rows[1].extra);
+		CHECK(rows.size() == 1 && skipped == 1);
+		if (rows.size() == 1) {
+			CHECK(rows[0].extra == std::optional<std::size_t>(0));
 			Anima::Settings e;
-			CHECK(Anima::Shown(rows[0], e) && Anima::Shown(rows[1], e));
+			CHECK(Anima::Shown(rows[0], e));
 			e.extras[0] = false;
-			CHECK(!Anima::Shown(rows[0], e) && Anima::Shown(rows[1], e));
+			CHECK(!Anima::Shown(rows[0], e));
 			e.extras[0] = true;
 			e.kinds[static_cast<std::size_t>(Anima::Kind::kSpell)] = false;
 			CHECK(!Anima::Shown(rows[0], e));  // its kind's switch still rules it
