@@ -31,7 +31,7 @@ namespace
 #define CHECK(x) Check((x), #x, __LINE__)
 
 	// the fewest checks a whole run makes (raise it when checks are added; lower it only when checks are removed on purpose)
-	constexpr int kFloor = 228 + FloorLightChecks::kCount;
+	constexpr int kFloor = 246 + FloorLightChecks::kCount;
 
 	[[nodiscard]] bool Near(float a, float b, float a_eps = 0.001f) { return std::fabs(a - b) <= a_eps; }
 
@@ -103,6 +103,12 @@ namespace
 		CHECK(sp.size() == 1 && s1 == 1);  // a row naming no creature, model or record is left out
 		CHECK(!sp.empty() && sp[0].kind == Anima::Kind::kBurst && sp[0].records.size() == 1 && sp[0].records[0] == "0x19531~Dragonborn.esm");
 		CHECK(!sp.empty() && Near(sp[0].size, 8.0f));
+
+		// a burst's 7.1 flash is kept, 99 stops at the top
+		std::istringstream strong("[creature]\nrace=X\nstrength=7.1\n[creature]\nrace=Y\nstrength=99\n");
+		std::size_t        sStrong = 0;
+		const auto         st = Anima::ReadCreatures(strong, sStrong);
+		CHECK(st.size() == 2 && sStrong == 0 && Near(st[0].strength, 7.1f) && Near(st[1].strength, 12.0f));
 
 		// on a bone: one light per offset, or one on the bone itself; on a body without it: the row's points
 		std::istringstream bone("[creature]\nrace=X\nnode=FireAtronach_Spine2 [Spn2]\noffset=0,0,5.8\noffset=1,2,3\noffset=bad\npoint=0,-0.7,94.4\n[creature]\nrace=Y\nnode=Z\npoint=1,1,1\npoint=2,2,2\n");
@@ -188,6 +194,11 @@ namespace
 		CHECK((Anima::AddonsWorn(std::vector{ 1, 2, 3 }, std::vector{ 3, 1 }, fits) == std::vector{ 1, 3 }));
 		CHECK((Anima::AddonsWorn(std::vector{ 1, 2, 3 }, std::vector<int>{}, fits) == std::vector{ 1, 2, 3 }));
 		CHECK((Anima::AddonsWorn(std::vector{ 1, 2, 3 }, std::vector{ 9 }, fits) == std::vector{ 1, 2, 3 }));
+		// a null addon (0 here) never counts, on either path
+		CHECK((Anima::AddonsWorn(std::vector{ 0, 1, 2 }, std::vector<int>{}, fits) == std::vector{ 1, 2 }));
+		CHECK((Anima::AddonsWorn(std::vector{ 0, 1, 2 }, std::vector{ 9 }, fits) == std::vector{ 1, 2 }));
+		CHECK((Anima::AddonsWorn(std::vector{ 0, 1, 2 }, std::vector{ 2 }, fits) == std::vector{ 2 }));
+		CHECK(Anima::AddonsWorn(std::vector{ 0, 0 }, std::vector<int>{}, fits).empty());
 		CHECK(d.kinds[0] && d.kinds[1] && d.kinds[2] && d.kinds[3]);
 
 		Anima::Settings s;
@@ -198,14 +209,17 @@ namespace
 		s.reach = 75;
 		s.flicker = false;
 		s.theirs = { true, false, true, false };
+		s.extras[0] = false;
 		std::ostringstream out;
 		Anima::WriteSettings(s, out);
 		std::istringstream in(out.str());
 		Anima::Settings    r;
 		const auto         keys = Anima::ReadSettings(in, r);
-		CHECK(keys == 12 + Anima::kOthers);
+		CHECK(keys == 12 + Anima::kOthers + Anima::kExtraCount);
 		CHECK(!r.on && !r.kinds[2] && r.kinds[1] && r.natural && r.brightness == 150 && r.reach == 75 && !r.flicker && r.deathFade);
 		CHECK(r.theirs[0] && !r.theirs[1] && r.theirs[2] && !r.theirs[3]);
+		CHECK(!r.extras[0]);                                                   // a light of its own switch keeps its off through the file
+		CHECK(std::ranges::all_of(d.extras, [](bool a_on) { return a_on; }));  // every such light is on by default
 
 		std::istringstream odd("\xEF\xBB\xBF[Settings]\nBrightness=99999\nReach=abc\nUnknown=1\nLights = off\n; Reach=10\n");
 		Anima::Settings    o;
@@ -231,6 +245,39 @@ namespace
 		s.kinds[0] = true;
 		s.on = false;
 		CHECK(!Anima::Shown(fire, s));
+
+		// a row of its own switch (his 575): read off switch=, shown only while that switch is on; a switch name no menu has leaves the row
+		// out (counted), so no light is left on with nothing to turn it off
+		std::istringstream steam(
+			"[creature]\nname=Steam\nmodel=magic\\steam.nif\nkind=spell\nelement=fire\nswitch=CenturionSteam\ncolor=255,133,75\n"
+			"[creature]\nname=Odd\nmodel=magic\\odd.nif\nkind=spell\nelement=fire\nswitch=NoSuchSwitch\ncolor=1,2,3\n");
+		std::size_t skipped = 0;
+		const auto  rows = Anima::ReadCreatures(steam, skipped);
+		CHECK(rows.size() == 1 && skipped == 1);
+		if (rows.size() == 1) {
+			CHECK(rows[0].extra == std::optional<std::size_t>(0));
+			Anima::Settings e;
+			CHECK(Anima::Shown(rows[0], e));
+			e.extras[0] = false;
+			CHECK(!Anima::Shown(rows[0], e));
+			e.extras[0] = true;
+			e.kinds[static_cast<std::size_t>(Anima::Kind::kSpell)] = false;
+			CHECK(!Anima::Shown(rows[0], e));  // its kind's switch still rules it
+		}
+		Anima::Row stray;
+		stray.extra = Anima::kExtraCount;  // never made by the reader; a bad index lights nothing rather than reading past the switches
+		CHECK(!Anima::Shown(stray, Anima::Settings{}));
+
+		// a ghost row (his 573): read off shader= alone, it names a creature; it joins only a creature with no glow of its own
+		std::istringstream ghost("[creature]\nname=Ghost\nshader=0x3B6CB~Skyrim.esm\nelement=spirit\ncolor=114,170,255\npoint=0,0,64\n");
+		std::size_t        gs = 0;
+		const auto         ghosts = Anima::ReadCreatures(ghost, gs);
+		CHECK(ghosts.size() == 1 && gs == 0 && ghosts[0].shaders.size() == 1 && ghosts[0].shaders[0] == "0x3B6CB~Skyrim.esm");
+		const auto glow = [](std::size_t a_i) { return a_i == 1; };  // row 1 a glow, row 2 eyes, row 9 the ghost
+		CHECK((Anima::WithGhostRows(std::vector<std::size_t>{}, { 9 }, glow) == std::vector<std::size_t>{ 9 }));
+		CHECK((Anima::WithGhostRows(std::vector<std::size_t>{ 2 }, { 9 }, glow) == std::vector<std::size_t>{ 2, 9 }));
+		CHECK((Anima::WithGhostRows(std::vector<std::size_t>{ 1, 2 }, { 9 }, glow) == std::vector<std::size_t>{ 1, 2 }));
+		CHECK((Anima::WithGhostRows(std::vector<std::size_t>{ 9 }, { 9 }, glow) == std::vector<std::size_t>{ 9 }));
 	}
 
 	void OtherMods()
