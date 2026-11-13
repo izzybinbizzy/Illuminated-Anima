@@ -56,6 +56,7 @@ namespace Plugin
 			bool                             dying{ false };
 			bool                             loading{ false };  // hung on a body the game has not stored yet
 			std::optional<Clock::time_point> castAt;            // for the report only: no motion reads it
+			float                            notice{ 1.0f };    // dark until noticed: the share of its lights its fight gives now
 		};
 
 		std::unordered_map<RE::FormID, Lit> gLit;  // main thread only
@@ -456,6 +457,8 @@ namespace Plugin
 			return rows;
 		}
 
+		void ApplyNotice(Lit& a_lit, float a_share, const Anima::Settings& a_s, bool a_snap);
+
 		// lights this creature when a row names it and the settings show it; drops its lights when not. a_loading: the body its load
 		// just returned, which a queued load hands over before the game stores it
 		void Consider(RE::Actor* a_actor, const Anima::Settings& a_s, RE::NiAVObject* a_loading = nullptr)
@@ -529,8 +532,13 @@ namespace Plugin
 					lit.lights.push_back(std::move(one));
 				}
 			}
-			if (!lit.lights.empty()) {
-				gLit.emplace(id, std::move(lit));
+			if (lit.lights.empty()) {
+				return;
+			}
+			auto& placed = gLit.emplace(id, std::move(lit)).first->second;
+			// dark until noticed: a creature lit in no fight starts dark (searching is not readable here, so it counts as calm)
+			if (a_s.noticed && !placed.dying && !a_actor->IsInCombat()) {
+				ApplyNotice(placed, 0.0f, a_s, true);
 			}
 		}
 
@@ -692,7 +700,8 @@ namespace Plugin
 		// a cast's surge: up fast and back down, then the flicker it had (a light with no flicker just ends on its own fade)
 		void StartSurge(Lit& a_lit, const Anima::Settings& a_s)
 		{
-			if (a_lit.dying || !a_s.surge) {
+			// dark until noticed holds it below full: a cast out of a fight (a summon's buff, a spriggan's heal) leaves it as its fight has it
+			if (a_lit.dying || !a_s.surge || (a_s.noticed && a_lit.notice < 1.0f)) {
 				return;
 			}
 			a_lit.castAt = Clock::now();
@@ -705,6 +714,29 @@ namespace Plugin
 				}
 				Play(one, one.cast, seconds, loops);
 			}
+		}
+
+		// dark until noticed: its lights ease to the share its fight gives (the game's combat state) and hold there, or flicker on at it
+		void ApplyNotice(Lit& a_lit, float a_share, const Anima::Settings& a_s, bool a_snap)
+		{
+			if (a_lit.dying || a_share == a_lit.notice) {
+				return;
+			}
+			const float from = a_snap ? a_share : a_lit.notice;
+			for (auto& one : a_lit.lights) {
+				const auto shape = ShapeOf(Rows()[one.row], a_s);
+				const auto keys = Anima::NoticeKeys(one.fade, shape, a_lit.seed, from, a_share);
+				if (const auto played = MakeKeys(keys)) {
+					Play(one, played, keys.back().time, false);
+				} else if (one.light) {
+					// no keys to play (an old VR Address Library): straight to the share
+					if (one.dimmer) {
+						one.dimmer->Stop();
+					}
+					one.light->GetLightRuntimeData().fade = one.fade * a_share;
+				}
+			}
+			a_lit.notice = a_share;
 		}
 
 		// out of combat: back to the plain flicker, so a cast's keys do not come round again with no cast
@@ -730,14 +762,15 @@ namespace Plugin
 		// what the game's events noted for the main thread: a sink only writes a form id here (it may run on a job thread)
 		struct Noted
 		{
-			std::mutex                 lock;
-			std::vector<Loaded>        loaded;
-			std::vector<RE::FormID>    died;
-			std::vector<RE::FormID>    cast;
-			std::vector<RE::FormID>    calm;
-			std::vector<RE::FormID>    art;            // an art object started on it: another mod's light may hang on that
-			std::vector<std::uint32_t> artOn, artOff;  // art effects whose art a row names: started, ended (their ids)
-			std::vector<ImpactOne>     impactGone;     // an impact's light whose particle ended: taken off the scene here
+			std::mutex                              lock;
+			std::vector<Loaded>                     loaded;
+			std::vector<RE::FormID>                 died;
+			std::vector<RE::FormID>                 cast;
+			std::vector<RE::FormID>                 calm;
+			std::vector<std::pair<RE::FormID, int>> notice;         // a combat state reached (0 none, 1 in combat, 2 searching): dark until noticed
+			std::vector<RE::FormID>                 art;            // an art object started on it: another mod's light may hang on that
+			std::vector<std::uint32_t>              artOn, artOff;  // art effects whose art a row names: started, ended (their ids)
+			std::vector<ImpactOne>                  impactGone;     // an impact's light whose particle ended: taken off the scene here
 			// a claimed particle whose update ran off the main thread, held until its light is hung here
 			std::vector<std::pair<RE::NiPointer<RE::BSTempEffectParticle>, std::size_t>> impactHang;
 			std::vector<std::pair<RE::FormID, RE::FormID>>                               worn;  // id, the ability's effect that carries a light
@@ -864,6 +897,7 @@ namespace Plugin
 			const auto                                                                   s = SettingsNow();
 			std::vector<Loaded>                                                          loaded;
 			std::vector<RE::FormID>                                                      died, cast, calm, art;
+			std::vector<std::pair<RE::FormID, int>>                                      notice;
 			std::vector<std::pair<RE::FormID, RE::FormID>>                               worn;
 			std::vector<std::pair<RE::FormID, RE::NiPointer<RE::BSLight>>>               castLights;
 			std::vector<std::uint32_t>                                                   artOn, artOff;
@@ -876,6 +910,7 @@ namespace Plugin
 				died.swap(gNoted.died);
 				cast.swap(gNoted.cast);
 				calm.swap(gNoted.calm);
+				notice.swap(gNoted.notice);
 				art.swap(gNoted.art);
 				artOn.swap(gNoted.artOn);
 				artOff.swap(gNoted.artOff);
@@ -952,6 +987,14 @@ namespace Plugin
 			for (const auto id : calm) {
 				if (const auto it = gLit.find(id); it != gLit.end()) {
 					EndSurge(it->second);
+				}
+			}
+			// after the calm ones' flicker is back: dark until noticed eases each to its fight's share
+			if (s.noticed) {
+				for (const auto& [id, state] : notice) {
+					if (const auto it = gLit.find(id); it != gLit.end()) {
+						ApplyNotice(it->second, Anima::NoticeShare(state), s, false);
+					}
 				}
 			}
 			if (pick) {
@@ -1309,8 +1352,16 @@ namespace Plugin
 
 			RE::BSEventNotifyControl ProcessEvent(const RE::TESCombatEvent* a_event, RE::BSTEventSource<RE::TESCombatEvent>*) override
 			{
-				if (!NothingLit() && a_event && a_event->actor && a_event->newState.get() == RE::ACTOR_COMBAT_STATE::kNone) {
-					Note([a_event]() { gNoted.calm.push_back(a_event->actor->GetFormID()); });
+				// every state is noted for dark until noticed (the task reads whether it is on); a calm one also ends a cast's keys
+				if (!NothingLit() && a_event && a_event->actor) {
+					const auto state = a_event->newState.get();
+					const auto id = a_event->actor->GetFormID();
+					Note([id, state]() {
+						gNoted.notice.emplace_back(id, static_cast<int>(state));
+						if (state == RE::ACTOR_COMBAT_STATE::kNone) {
+							gNoted.calm.push_back(id);
+						}
+					});
 				}
 				return RE::BSEventNotifyControl::kContinue;
 			}
@@ -1398,6 +1449,7 @@ namespace Plugin
 			gNoted.died.clear();
 			gNoted.cast.clear();
 			gNoted.calm.clear();
+			gNoted.notice.clear();
 			gNoted.art.clear();
 			gNoted.artOn.clear();
 			gNoted.artOff.clear();
@@ -1499,7 +1551,7 @@ namespace Plugin
 			}
 			const bool casting = lit.castAt && std::chrono::duration<float>(Clock::now() - *lit.castAt).count() < Anima::kSurgeSeconds;
 			out.push_back({ { "formID", std::format("{:08X}", id) }, { "name", actor ? actor->GetName() : "" },
-				{ "dying", lit.dying }, { "casting", casting }, { "lights", std::move(lights) } });
+				{ "dying", lit.dying }, { "casting", casting }, { "notice", lit.notice }, { "lights", std::move(lights) } });
 		}
 		return out;
 	}
