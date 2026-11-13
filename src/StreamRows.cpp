@@ -9,6 +9,7 @@
 
 #include "BeamRow.h"
 #include "LightKit.h"
+#include "RowPark.h"
 
 #include <chrono>
 #include <format>
@@ -98,20 +99,17 @@ namespace StreamRows
 		std::vector<RE::NiPointer<RE::TESObjectREFR>> gToHang;
 		std::vector<RE::NiPointer<RE::NiAVObject>>    gToDrop;
 		std::uint32_t                                 gSweepClock = 0;  // frames since the last sweep (main thread)
-		// a projectile that flies while its row is switched off or the light cap is full: its row is hung when that passes (main thread)
-		std::vector<RE::NiPointer<RE::TESObjectREFR>> gParkedRows;
-		constexpr std::size_t                         kMostParked = 64;
+		// a projectile that flies while its row cannot hang (RowPark.h): held back by the cap, tried each frame; by its switch, tried
+		// again only when the switches move (Refresh), so a row switched off keeps no pass awake (main thread)
+		RowPark::Parked<RE::NiPointer<RE::TESObjectREFR>> gParked;
 
-		void ParkRow(RE::TESObjectREFR* a_ref)
+		[[nodiscard]] bool Ended(const RE::NiPointer<RE::TESObjectREFR>& a_parked)
 		{
-			std::erase_if(gParkedRows, [](const auto& a_parked) {
-				const auto* root = a_parked ? a_parked->Get3D() : nullptr;
-				return !root || !root->parent;
-			});
-			if (a_ref && gParkedRows.size() < kMostParked) {
-				gParkedRows.emplace_back(a_ref);
-			}
+			const auto* root = a_parked ? a_parked->Get3D() : nullptr;
+			return !root || !root->parent;
 		}
+
+		void ParkRow(RE::TESObjectREFR* a_ref, RowPark::Why a_why) { gParked.Park(RE::NiPointer<RE::TESObjectREFR>(a_ref), a_why, Ended); }
 
 		// a cone's cloud: its art leaves world-space particles along the path, so its one light hangs in the node the cone hangs in -
 		// which stays when the cone's 3D goes - and is moved there every frame (main thread)
@@ -537,7 +535,7 @@ namespace StreamRows
 				return;
 			}
 			if (!RowOn(a_rec)) {
-				ParkRow(a_ref);
+				ParkRow(a_ref, RowPark::Why::kHeldBack);
 				return;
 			}
 			std::size_t n = 0;
@@ -554,7 +552,7 @@ namespace StreamRows
 				n = (std::min)(want.size(), kMostRowLights - (std::min)(gRowLights, kMostRowLights));
 			}
 			if (!n) {
-				ParkRow(a_ref);  // the light cap is full: tried again when a row lets its lights go
+				ParkRow(a_ref, RowPark::Why::kCap);  // the light cap is full: tried again when a row lets its lights go
 				return;
 			}
 			const bool                              isl = InverseSquare();
@@ -579,7 +577,7 @@ namespace StreamRows
 					made.size(), proj->GetProjectileRuntimeData().range, a_rec.reach, a_rec.fade);
 			}
 			if (made.empty()) {
-				ParkRow(a_ref);
+				ParkRow(a_ref, RowPark::Why::kCap);
 				return;
 			}
 			std::lock_guard l{ gLiveLock };
@@ -695,17 +693,22 @@ namespace StreamRows
 
 	void Refresh()
 	{
-		// a row goes with its switch at once; it is hung again when the switch comes back while its projectile still flies
-		auto*           scene = LightKit::Scene();
-		std::lock_guard l{ gLiveLock };
-		ForgetIf(scene, [](const Live& a_live) {
-			const auto rec = gRows.find(a_live.base);
-			const bool off = rec == gRows.end() || !RowOn(rec->second);
-			if (off && rec != gRows.end()) {
-				ParkRow(a_live.beam.get());
-			}
-			return off;
-		});
+		// a row goes with its switch at once; it is hung again when the switch comes back while its projectile still flies: every row a
+		// switch held back is tried once on the next frame
+		gParked.Wake(Ended);
+		{
+			auto*           scene = LightKit::Scene();
+			std::lock_guard l{ gLiveLock };
+			ForgetIf(scene, [](const Live& a_live) {
+				const auto rec = gRows.find(a_live.base);
+				const bool off = rec == gRows.end() || !RowOn(rec->second);
+				if (off && rec != gRows.end()) {
+					ParkRow(a_live.beam.get(), RowPark::Why::kHeldBack);
+				}
+				return off;
+			});
+		}
+		gAwake.store(true, std::memory_order_relaxed);
 	}
 
 	bool Awake() { return gAwake.load(std::memory_order_relaxed); }
@@ -723,16 +726,14 @@ namespace StreamRows
 				letGo.swap(gLetGo);
 			}
 		}
-		// a row its switch or the light cap held back: tried again while its projectile flies, let go when that ends
-		if (!gParkedRows.empty()) {
+		// a row the light cap held back (or one a switch change woke): tried again while its projectile flies, let go when that ends
+		if (gParked.KeepsAwake()) {
 			bool room = false;
 			{
 				std::lock_guard l{ gLiveLock };
 				room = gRowLights < kMostRowLights;
 			}
-			auto parked = std::move(gParkedRows);
-			gParkedRows.clear();
-			for (const auto& ref : parked) {
+			for (const auto& ref : gParked.TakeRetries()) {
 				auto*      root = ref ? ref->Get3D() : nullptr;
 				auto*      base = ref ? ref->GetBaseObject() : nullptr;
 				const auto rec = base ? gRows.find(base->GetFormID()) : gRows.end();
@@ -740,9 +741,9 @@ namespace StreamRows
 					continue;
 				}
 				if (room) {
-					HangRow(ref.get(), root->AsNode(), base->GetFormID(), rec->second);  // parks it again while its row stays off
+					HangRow(ref.get(), root->AsNode(), base->GetFormID(), rec->second);  // parks it again, by its cause, when it still cannot hang
 				} else {
-					gParkedRows.push_back(ref);
+					ParkRow(ref.get(), RowPark::Why::kCap);
 				}
 			}
 		}
@@ -765,7 +766,7 @@ namespace StreamRows
 				MoveRows();  // every row follows its real length this frame
 			}
 			if (gToHang.empty() && gToDrop.empty()) {
-				if (gLive.empty() && gLetGo.empty() && gParkedRows.empty() && gCloudWait.empty() && gClouds.empty()) {
+				if (gLive.empty() && gLetGo.empty() && !gParked.KeepsAwake() && gCloudWait.empty() && gClouds.empty()) {
 					gAwake.store(false, std::memory_order_relaxed);
 				}
 				return;
@@ -804,8 +805,8 @@ namespace StreamRows
 			letGo.push_back(std::move(wait.ref));
 		}
 		gCloudWait.clear();
-		letGo.insert(letGo.end(), std::make_move_iterator(gParkedRows.begin()), std::make_move_iterator(gParkedRows.end()));
-		gParkedRows.clear();
+		auto parked = gParked.TakeAll();
+		letGo.insert(letGo.end(), std::make_move_iterator(parked.begin()), std::make_move_iterator(parked.end()));
 		letGo.insert(letGo.end(), std::make_move_iterator(gLetGo.begin()), std::make_move_iterator(gLetGo.end()));
 		gLetGo.clear();
 		gRowLights = 0;
@@ -847,7 +848,7 @@ namespace StreamRows
 	Counts Stats()
 	{
 		std::lock_guard l{ gLiveLock };
-		return { gLive.size(), gRowLights, gParkedRows.size(), gClouds.size() };
+		return { gLive.size(), gRowLights, gParked.Size(), gClouds.size() };
 	}
 }
 

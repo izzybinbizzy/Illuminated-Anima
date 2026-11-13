@@ -7,6 +7,7 @@
 
 #include "AnimaMath.h"
 #include "FloorLightChecks.h"
+#include "RowParkChecks.h"
 
 #include <cmath>
 #include <cstdio>
@@ -31,7 +32,7 @@ namespace
 #define CHECK(x) Check((x), #x, __LINE__)
 
 	// the fewest checks a whole run makes (raise it when checks are added; lower it only when checks are removed on purpose)
-	constexpr int kFloor = 256 + FloorLightChecks::kCount;
+	constexpr int kFloor = 256 + FloorLightChecks::kCount + RowParkChecks::kCount;
 
 	[[nodiscard]] bool Near(float a, float b, float a_eps = 0.001f) { return std::fabs(a - b) <= a_eps; }
 
@@ -616,6 +617,7 @@ int main()
 	OverTime();
 	Keys();
 	FloorLightChecks::Run(Check);
+	RowParkChecks::Run(Check);
 	std::printf("%d passed, %d failed\n", gPassed, gFailed);
 	if (gPassed + gFailed < kFloor) {
 		std::printf("FAIL: only %d checks ran, fewer than the floor %d\n", gPassed + gFailed, kFloor);
