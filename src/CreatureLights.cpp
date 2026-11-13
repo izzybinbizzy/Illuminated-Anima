@@ -348,6 +348,9 @@ namespace Plugin
 			};
 			std::vector<Found> found;
 			lists->ForEachModelEffect([&](RE::ModelReferenceEffect* a_effect) {
+				if (!a_effect) {
+					return RE::BSContainer::ForEachResult::kContinue;
+				}
 				const auto row = a_effect->finished ? std::nullopt : ArtRow(a_effect->artObject);
 				const auto id = a_effect->effectID;
 				const bool wanted = a_all || std::ranges::find(a_effects, id) != a_effects.end();
@@ -394,11 +397,12 @@ namespace Plugin
 				}
 			}
 			const auto s = SettingsNow();
-			auto*      object = a_particle->particleObject.get();
-			auto*      node = object && object->parent ? object->AsNode() : nullptr;
-			auto*      scene = LightKit::Scene();
-			ImpactOne  one;
-			auto*      light = node && scene && RowShows(a_row, s) ? LightKit::CloneLight() : nullptr;
+			// held for the time the light is made: the particle's own detach (on a worker thread) can let go of its copy meanwhile
+			const RE::NiPointer<RE::NiAVObject> object = a_particle->particleObject;
+			auto*                               node = object && object->parent ? object->AsNode() : nullptr;
+			auto*                               scene = LightKit::Scene();
+			ImpactOne                           one;
+			auto*                               light = node && scene && RowShows(a_row, s) ? LightKit::CloneLight() : nullptr;
 			if (light) {
 				const auto& row = Rows()[a_row];
 				light->name = kName;
@@ -416,6 +420,8 @@ namespace Plugin
 			{
 				std::scoped_lock l{ gImpactLock };
 				if (const auto it = gImpactLit.find(a_particle); it != gImpactLit.end()) {
+					// two hang tasks for one particle (a settings change cleared the table between them): one tracked light, never two
+					TakeImpact(it->second, scene);
 					it->second = std::move(one);
 					return;
 				}
@@ -1148,6 +1154,8 @@ namespace Plugin
 		// an impact particle's end: its light out of the table and to the main-thread task (a free may come on any thread)
 		void EndImpact(const void* a_particle)
 		{
+			// a splash that ends while it loads leaves no pending row for another particle that comes back at its address
+			(void)TakePending(a_particle);
 			ImpactOne one;
 			{
 				std::scoped_lock l{ gImpactLock };
@@ -1164,37 +1172,52 @@ namespace Plugin
 			}
 		}
 
+		// after the game's update: a splash in place is judged once (a row by its impact record, its name or its pending entry), and the light
+		// is hung on the main thread, here when the update ran there, else by the task (measured: off it); one still loading keeps its row
+		void AfterUpdate(RE::BSTempEffectParticle* a_this, std::optional<std::size_t> a_named)
+		{
+			if (!a_this->particleObject) {
+				if (a_named) {
+					KeepPending(a_this, *a_named);
+				}
+				return;
+			}
+			// devbench tells an empty impactData from a record that is not ours by these two
+			gImpactSeen.fetch_add(1, std::memory_order_relaxed);
+			gImpactLastRecord.store(a_this->impactData ? a_this->impactData->GetFormID() : 0, std::memory_order_relaxed);
+			auto row = ImpactRow(a_this->impactData);
+			if (!row) {
+				row = a_named ? a_named : TakePending(a_this);
+			}
+			if (!row) {
+				NoteRootName(a_this->particleObject->name.c_str());
+				return;
+			}
+			if (!ClaimImpact(a_this)) {
+				return;
+			}
+			if (REX::W32::GetCurrentThreadId() == gMainThread) {
+				HangImpact(a_this, *row);
+			} else {
+				Note([a_this, row]() { gNoted.impactHang.emplace_back(RE::NiPointer<RE::BSTempEffectParticle>(a_this), *row); });
+			}
+		}
+
 		// an impact's splash (BSTempEffectParticle, read in the 1.6.1170 exe: its Update moves the finished copy into place, its Detach or its
 		// destructor take it off): every particle passes these three slots, so the idle path is one or two reads
 		struct ImpactUpdate
 		{
 			static bool thunk(RE::BSTempEffectParticle* a_this, float a_delta)
 			{
-				// the model's name is held only until its copy is in place, which this update may do, so its row is read before it
-				const auto named = gImpactRows && a_this && a_this->modelName ? RowByModelCached(a_this->modelName) : std::nullopt;
+				// the model's name is held only until its copy is in place, which this update may do, so its row is read before it; our work
+				// runs guarded on both sides of the game's update, which always runs and keeps its own result
+				std::optional<std::size_t> named;
+				if (gImpactRows && a_this && a_this->modelName) {
+					Guarded("impact name", [&]() { named = RowByModelCached(a_this->modelName); });
+				}
 				const bool live = func(a_this, a_delta);
-				if (gImpactRows && a_this && a_this->particleObject) {
-					// devbench tells an empty impactData from a record that is not ours by these two
-					gImpactSeen.fetch_add(1, std::memory_order_relaxed);
-					gImpactLastRecord.store(a_this->impactData ? a_this->impactData->GetFormID() : 0, std::memory_order_relaxed);
-					auto row = ImpactRow(a_this->impactData);
-					if (!row) {
-						row = named ? named : TakePending(a_this);
-					}
-					if (!row) {
-						NoteRootName(a_this->particleObject->name.c_str());
-					}
-					// judged once; the light is hung on the main thread, here when the update runs there, else by the task (measured: off it)
-					if (row && ClaimImpact(a_this)) {
-						if (REX::W32::GetCurrentThreadId() == gMainThread) {
-							Guarded("impact light", [a_this, row]() { HangImpact(a_this, *row); });
-						} else {
-							Note([a_this, row]() { gNoted.impactHang.emplace_back(RE::NiPointer<RE::BSTempEffectParticle>(a_this), *row); });
-						}
-					}
-				} else if (named && a_this) {
-					// still loading: its name is gone by the frame its copy is in place, so its row waits for it
-					KeepPending(a_this, *named);
+				if (gImpactRows && a_this) {
+					Guarded("impact update", [&]() { AfterUpdate(a_this, named); });
 				}
 				return live;
 			}
@@ -1205,7 +1228,7 @@ namespace Plugin
 		{
 			static void thunk(RE::BSTempEffectParticle* a_this)
 			{
-				if (a_this && gImpactCount.load(std::memory_order_relaxed)) {
+				if (a_this && (gImpactCount.load(std::memory_order_relaxed) || gPendingCount.load(std::memory_order_relaxed))) {
 					Guarded("impact end", [a_this]() { EndImpact(a_this); });
 				}
 				func(a_this);
@@ -1217,7 +1240,7 @@ namespace Plugin
 		{
 			static RE::BSTempEffectParticle* thunk(RE::BSTempEffectParticle* a_this, std::uint32_t a_flags)
 			{
-				if (a_this && gImpactCount.load(std::memory_order_relaxed)) {
+				if (a_this && (gImpactCount.load(std::memory_order_relaxed) || gPendingCount.load(std::memory_order_relaxed))) {
 					Guarded("impact freed", [a_this]() { EndImpact(a_this); });
 				}
 				return func(a_this, a_flags);

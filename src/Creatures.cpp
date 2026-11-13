@@ -22,6 +22,7 @@ namespace Plugin
 
 		std::vector<Anima::Row>                                                 gRows;
 		std::vector<CreatureGroup>                                              gCreatureList;  // written once at data load, read after
+		std::atomic<bool>                                                       gCreatureListReady{ false };
 		std::unordered_map<RE::TESRace*, std::vector<std::size_t>>              gByRace;
 		std::unordered_map<std::string, std::vector<std::size_t>>               gByModel;    // NormalPath -> rows
 		std::unordered_set<const RE::TESObjectARMO*>                            gRowSkins;   // every skin a character wears that holds a model of gByModel, or a row names
@@ -106,6 +107,7 @@ namespace Plugin
 				SKSE::log::info("creatures files: {} moved row(s) left to the older Illuminated / RELight loaded", before - gRows.size());
 			}
 			// the menu's creature switches, one per creature a body row lights, in the files' order of groups, sorted inside each
+			gCreatureListReady.store(false, std::memory_order_release);
 			gCreatureList.clear();
 			for (const auto& row : gRows) {
 				if (!Anima::OnThePicker(row.kind)) {
@@ -124,6 +126,7 @@ namespace Plugin
 			for (auto& [name, creatures] : gCreatureList) {
 				std::ranges::sort(creatures);
 			}
+			gCreatureListReady.store(true, std::memory_order_release);
 		}
 
 		// a see-through creature (the game's ghosts, a spirit summon) wears an ability whose constant effect plays a ghost shader: every
@@ -940,5 +943,10 @@ namespace Plugin
 	std::size_t CreatureRowCount() { return gRows.size(); }
 	std::size_t FilesRead() { return gFiles; }
 
-	const std::vector<CreatureGroup>& CreatureList() { return gCreatureList; }
+	const std::vector<CreatureGroup>& CreatureList()
+	{
+		// devbench may ask from its own thread while data load still builds the list: empty until it is whole, fixed after
+		static const std::vector<CreatureGroup> none;
+		return gCreatureListReady.load(std::memory_order_acquire) ? gCreatureList : none;
+	}
 }

@@ -303,6 +303,19 @@ namespace Plugin
 			const auto it = byModel.find(Anima::NormalPath(a_model));
 			return it != byModel.end() ? std::optional<std::size_t>(it->second) : std::nullopt;
 		};
+		// a projectile a stream row claims keeps its own light whatever another row names it by, record or model: a row and our record
+		// light on one breath would light it twice
+		std::unordered_set<const RE::BGSProjectile*> streamed;
+		for (const auto& row : rows) {
+			if (row.stream != Anima::Stream::kNone) {
+				for (const auto& key : row.records) {
+					auto* form = FormOfKey(key);
+					if (const auto* p = form ? form->As<RE::BGSProjectile>() : nullptr) {
+						streamed.insert(p);
+					}
+				}
+			}
+		}
 		// the records named by form first: they win over a model shared with other records
 		for (std::size_t i = 0; i < rows.size(); ++i) {
 			if (rows[i].stream != Anima::Stream::kNone) {
@@ -311,6 +324,9 @@ namespace Plugin
 			for (const auto& key : rows[i].records) {
 				auto* form = FormOfKey(key);
 				if (auto* p = form ? form->As<RE::BGSProjectile>() : nullptr) {
+					if (streamed.contains(p)) {
+						continue;  // drawn by its stream row, which keeps the projectile's own light
+					}
 					Add(p->data.light, i, white, p, p->GetModel());
 				} else if (auto* e = form ? form->As<RE::BGSExplosion>() : nullptr) {
 					Add(e->data.light, i, white, e, e->GetModel());
@@ -321,19 +337,6 @@ namespace Plugin
 				} else if (form || key.find('~') != std::string::npos) {
 					SKSE::log::info("creature spells: {} names {} - not a projectile, explosion, hazard or magic effect of this load order",
 						rows[i].name, key);
-				}
-			}
-		}
-		// a projectile a stream row claims keeps its own light whatever another row's model says: a row and our record light on one
-		// breath would light it twice
-		std::unordered_set<const RE::BGSProjectile*> streamed;
-		for (const auto& row : rows) {
-			if (row.stream != Anima::Stream::kNone) {
-				for (const auto& key : row.records) {
-					auto* form = FormOfKey(key);
-					if (const auto* p = form ? form->As<RE::BGSProjectile>() : nullptr) {
-						streamed.insert(p);
-					}
 				}
 			}
 		}
