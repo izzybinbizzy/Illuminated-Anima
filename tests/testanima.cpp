@@ -104,6 +104,12 @@ namespace
 		CHECK(!sp.empty() && sp[0].kind == Anima::Kind::kBurst && sp[0].records.size() == 1 && sp[0].records[0] == "0x19531~Dragonborn.esm");
 		CHECK(!sp.empty() && Near(sp[0].size, 8.0f));
 
+		// a burst's 7.1 flash is kept, 99 stops at the top
+		std::istringstream strong("[creature]\nrace=X\nstrength=7.1\n[creature]\nrace=Y\nstrength=99\n");
+		std::size_t        sStrong = 0;
+		const auto         st = Anima::ReadCreatures(strong, sStrong);
+		CHECK(st.size() == 2 && sStrong == 0 && Near(st[0].strength, 7.1f) && Near(st[1].strength, 12.0f));
+
 		// on a bone: one light per offset, or one on the bone itself; on a body without it: the row's points
 		std::istringstream bone("[creature]\nrace=X\nnode=FireAtronach_Spine2 [Spn2]\noffset=0,0,5.8\noffset=1,2,3\noffset=bad\npoint=0,-0.7,94.4\n[creature]\nrace=Y\nnode=Z\npoint=1,1,1\npoint=2,2,2\n");
 		std::size_t        s4 = 0;

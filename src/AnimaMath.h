@@ -254,7 +254,8 @@ namespace Anima
 				}
 			} else if (key == "strength") {
 				if (const auto n = Numbers(a_value, 1); n && n->size() == 1) {
-					a_row.strength = std::clamp((*n)[0], 0.05f, 4.0f);
+					// a burst's flash takes Illuminated's 7.1 and a draugr breath 5.9: the top is above both
+					a_row.strength = std::clamp((*n)[0], 0.05f, 12.0f);
 				}
 			} else if (key == "record") {
 				a_row.records.emplace_back(a_value);
