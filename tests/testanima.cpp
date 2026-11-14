@@ -32,7 +32,7 @@ namespace
 #define CHECK(x) Check((x), #x, __LINE__)
 
 	// the fewest checks a whole run makes (raise it when checks are added; lower it only when checks are removed on purpose)
-	constexpr int kFloor = 256 + FloorLightChecks::kCount + RowParkChecks::kCount;
+	constexpr int kFloor = 268 + FloorLightChecks::kCount + RowParkChecks::kCount;
 
 	[[nodiscard]] bool Near(float a, float b, float a_eps = 0.001f) { return std::fabs(a - b) <= a_eps; }
 
@@ -226,7 +226,7 @@ namespace
 		std::istringstream in(out.str());
 		Anima::Settings    r;
 		const auto         keys = Anima::ReadSettings(in, r);
-		CHECK(keys == 12 + Anima::kOthers + Anima::kExtraCount);
+		CHECK(keys == 13 + Anima::kOthers + Anima::kExtraCount);
 		CHECK(!r.on && !r.kinds[2] && r.kinds[1] && r.natural && r.brightness == 150 && r.reach == 75 && !r.flicker && r.deathFade);
 		CHECK(r.theirs[0] && !r.theirs[1] && r.theirs[2] && !r.theirs[3]);
 		CHECK(!r.extras[0]);                                                   // a light of its own switch keeps its off through the file
@@ -256,6 +256,17 @@ namespace
 		Anima::SetCreatureOn(c, "Flame Atronach", true);
 		Anima::SetCreatureOn(c, "Wisp (Soul Cairn)", true);
 		CHECK(!c.creaturesOff && held && held->size() == 2);  // a list already handed out never changes under its reader
+
+		// dark until noticed: off by default, written and read back on
+		Anima::Settings n;
+		CHECK(!n.noticed);
+		n.noticed = true;
+		std::ostringstream nOut;
+		Anima::WriteSettings(n, nOut);
+		std::istringstream nIn(nOut.str());
+		Anima::Settings    nr;
+		Anima::ReadSettings(nIn, nr);
+		CHECK(nr.noticed);
 	}
 
 	void Showing()
@@ -320,6 +331,16 @@ namespace
 		const auto  sr = Anima::ReadCreatures(streams, sStream);
 		CHECK(sr.size() == 1 && sStream == 2);
 		CHECK(!sr.empty() && sr[0].stream == Anima::Stream::kBolt && sr[0].records.size() == 1);
+		// a row's color where lights are drawn inverse square: color.isl= beside color=; none = the one color everywhere, a bad one leaves the
+		// row out like a bad color=
+		std::istringstream islIn(
+			"[creature]\nname=Two\nkind=spell\nstream=bolt\nrecord=0x4EFDF~Skyrim.esm\ncolor=54,96,255\ncolor.isl=81,111,255\n"
+			"[creature]\nname=Bad\nkind=spell\nstream=bolt\nrecord=0x4EFDF~Skyrim.esm\ncolor=1,2,3\ncolor.isl=1,2\n");
+		std::size_t      sIsl = 0;
+		const auto       isl = Anima::ReadCreatures(islIn, sIsl);
+		const Anima::Rgb plain{ 54, 96, 255 };
+		const Anima::Rgb drawnIsl{ 81, 111, 255 };
+		CHECK(isl.size() == 1 && sIsl == 1 && isl[0].rgb == plain && isl[0].rgbIsl == drawnIsl && !sr[0].rgbIsl);
 
 		// a moved row (lit by Illuminated / RELight before 1.1): moved=yes marks it, any other value leaves the row out (counted), and a row
 		// without the line is not moved
@@ -598,6 +619,33 @@ namespace
 		CHECK(Near(out.back().value, 0.0f));
 		const auto once = Anima::DeathKeys(1.5f, 0.25f, false);  // the fade switched off: straight to the end, the game needs two keys
 		CHECK(once.size() == 2 && Near(once.front().value, 0.25f) && Near(once.back().value, 0.25f));
+
+		// dark until noticed: the game's combat states give dark, part way and full; a steady light eases there and holds, rising faster than
+		// it falls; a flickering one flickers on at the new share; dark stays dark
+		CHECK(Near(Anima::NoticeShare(0), 0.0f) && Near(Anima::NoticeShare(1), 1.0f) && Near(Anima::NoticeShare(2), Anima::kSearchShare));
+		const auto rise = Anima::NoticeKeys(1.5f, Pulse::Kind::kNone, 7u, 0.0f, 1.0f);
+		CHECK(Near(rise.front().value, 0.0f) && Near(rise.back().value, 1.5f) && Near(rise.back().time, Anima::kNoticeUpSeconds, 0.05f));
+		bool climbs = true;
+		for (std::size_t i = 1; i < rise.size(); ++i) {
+			climbs = climbs && rise[i].value >= rise[i - 1].value - 1e-5f;
+		}
+		CHECK(climbs);
+		const auto calmDown = Anima::NoticeKeys(1.5f, Pulse::Kind::kNone, 7u, 1.5f, Anima::kSearchShare);
+		CHECK(Near(calmDown.back().value, 1.5f * Anima::kSearchShare) && Near(calmDown.back().time, Anima::kNoticeDownSeconds, 0.05f));
+		const auto dark = Anima::NoticeKeys(1.5f, Pulse::Kind::kFire, 7u, 0.0f, 0.0f);
+		CHECK(std::ranges::all_of(dark, [](const Anima::Key& a_k) { return Near(a_k.value, 0.0f); }) && dark.back().time < 5.0f);
+		const auto flame = Anima::NoticeKeys(1.5f, Pulse::Kind::kFire, 7u, 0.0f, 1.0f);
+		CHECK(flame.back().time > Anima::kCastSeconds && Near(flame.front().value, 0.0f));
+		// a creature lit part way through its fight starts at the state the game last announced for it; a change part way through an ease
+		// starts at the fade the light shows - a flickering one included, and above full (a cast's surge) - and a fade that cannot be read
+		// starts from the full fade at the share it knew
+		CHECK(Anima::StartState(2, true) == 2 && Anima::StartState(std::nullopt, true) == 1 && Anima::StartState(std::nullopt, false) == 0);
+		CHECK(Near(Anima::StartFade(0.3f, 1.5f, 1.0f), 0.3f) && Near(Anima::StartFade(2.4f, 1.5f, 0.5f), 2.4f) &&
+			  Near(Anima::StartFade(std::nanf(""), 1.5f, 0.5f), 0.75f) && Near(Anima::StartFade(-1.0f, 1.5f, 0.0f), 0.0f));
+		const auto cutShort = Anima::NoticeKeys(1.5f, Pulse::Kind::kFire, 7u, 0.3f, 0.0f);                // a flickering rise ended at 0.3
+		const auto inSurge = Anima::NoticeKeys(1.5f, Pulse::Kind::kFire, 7u, 2.4f, Anima::kSearchShare);  // a search starts mid-surge
+		CHECK(Near(cutShort.front().value, 0.3f) && Near(cutShort.back().value, 0.0f) && Near(inSurge.front().value, 2.4f) &&
+			  Near(inSurge[static_cast<std::size_t>(Anima::kNoticeDownSeconds * Anima::kKeysPerSecond) + 1].value, 1.5f * Anima::kSearchShare, 0.5f));
 	}
 }
 

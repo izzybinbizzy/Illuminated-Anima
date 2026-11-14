@@ -146,6 +146,7 @@ namespace Anima
 		Kind                       kind{ Kind::kGlow };
 		Element                    element{ Element::kSpirit };
 		Rgb                        rgb{ 255, 255, 255 };
+		std::optional<Rgb>         rgbIsl;  // color.isl=: a stream row's color where lights are drawn inverse square (Illuminated's rows differ by lighting)
 		float                      reach{ 256.0f };
 		float                      strength{ 1.0f };
 		bool                       ember{ false };           // a small light stays on its remains after the death fade
@@ -239,6 +240,20 @@ namespace Anima
 
 	namespace Detail
 	{
+		// three numbers 0-255, clamped first: a huge number cast to int is undefined
+		inline std::optional<Rgb> ReadRgb(std::string_view a_value)
+		{
+			const auto n = Numbers(a_value, 3);
+			if (!n || n->size() != 3) {
+				return std::nullopt;
+			}
+			Rgb rgb{};
+			for (std::size_t i = 0; i < 3; ++i) {
+				rgb[i] = static_cast<int>(std::clamp((*n)[i], 0.0f, 255.0f) + 0.5f);
+			}
+			return rgb;
+		}
+
 		// one key of a [creature] block onto its row; false when the value did not read (a color: the block is then left out)
 		inline bool Apply(Row& a_row, std::string_view a_key, std::string_view a_value)
 		{
@@ -268,13 +283,17 @@ namespace Anima
 					a_row.element = static_cast<Element>(*i);
 				}
 			} else if (key == "color") {
-				const auto n = Numbers(a_value, 3);
-				if (!n || n->size() != 3) {
+				const auto rgb = ReadRgb(a_value);
+				if (!rgb) {
 					return false;
 				}
-				for (std::size_t i = 0; i < 3; ++i) {
-					a_row.rgb[i] = static_cast<int>(std::clamp((*n)[i], 0.0f, 255.0f) + 0.5f);  // clamped first: a huge number cast to int is undefined
+				a_row.rgb = *rgb;
+			} else if (key == "color.isl") {
+				const auto rgb = ReadRgb(a_value);
+				if (!rgb) {
+					return false;
 				}
+				a_row.rgbIsl = *rgb;
 			} else if (key == "reach") {
 				if (const auto n = Numbers(a_value, 1); n && n->size() == 1) {
 					a_row.reach = std::clamp((*n)[0], 16.0f, 2048.0f);
@@ -607,7 +626,8 @@ namespace Anima
 		bool                          flicker{ true };
 		bool                          deathFade{ true };
 		bool                          surge{ true };
-		std::array<bool, kOthers>     theirs{};  // that mod's creatures keep its own light, ours off on them
+		bool                          noticed{ false };  // a creature's lights wait until it notices the player (his ask), off by default
+		std::array<bool, kOthers>     theirs{};          // that mod's creatures keep its own light, ours off on them
 		std::array<bool, kExtraCount> extras{ AllOn<kExtraCount>() };
 		// the creatures switched off one by one in the menu (by their creature name); shared, so copying the settings stays cheap
 		std::shared_ptr<const std::set<std::string, std::less<>>> creaturesOff;
@@ -659,8 +679,8 @@ namespace Anima
 		// one known key onto the settings; false for a key this version does not know
 		inline bool ApplySetting(Settings& a_s, std::string_view a_key, std::string_view a_value)
 		{
-			const std::array<std::pair<std::string_view, bool*>, 5> switches{ { { "Lights", &a_s.on }, { "NaturalElements", &a_s.natural },
-				{ "Flicker", &a_s.flicker }, { "DeathFade", &a_s.deathFade }, { "CastSurge", &a_s.surge } } };
+			const std::array<std::pair<std::string_view, bool*>, 6> switches{ { { "Lights", &a_s.on }, { "NaturalElements", &a_s.natural },
+				{ "Flicker", &a_s.flicker }, { "DeathFade", &a_s.deathFade }, { "CastSurge", &a_s.surge }, { "DarkUntilNoticed", &a_s.noticed } } };
 			for (const auto& [name, field] : switches) {
 				if (SameText(a_key, name)) {
 					*field = ReadBool(a_value, *field);
@@ -730,6 +750,7 @@ namespace Anima
 		a_out << "Flicker=" << (a_s.flicker ? 1 : 0) << '\n';
 		a_out << "DeathFade=" << (a_s.deathFade ? 1 : 0) << '\n';
 		a_out << "CastSurge=" << (a_s.surge ? 1 : 0) << '\n';
+		a_out << "DarkUntilNoticed=" << (a_s.noticed ? 1 : 0) << '\n';
 		for (std::size_t i = 0; i < kOthers; ++i) {
 			a_out << kOtherMods[i].key << '=' << (a_s.theirs[i] ? 1 : 0) << '\n';
 		}
@@ -861,6 +882,51 @@ namespace Anima
 				v += (first - v) * (std::min)(seam, 1.0f);
 			}
 			keys.push_back({ t, v });
+		}
+		return keys;
+	}
+
+	// dark until noticed: a creature's lights follow how far its fight has gone, by the game's combat state (TESCombatEvent: 0 none, 1 in
+	// combat, 2 searching) - dark while calm, part way while it searches, full in combat
+	inline constexpr float kSearchShare = 0.5f;
+	inline constexpr float kNoticeUpSeconds = 1.5f;    // the rise as it notices the player
+	inline constexpr float kNoticeDownSeconds = 3.0f;  // the fall as it calms down
+
+	[[nodiscard]] constexpr float NoticeShare(int a_state) noexcept
+	{
+		return a_state == 1 ? 1.0f : a_state == 2 ? kSearchShare :
+		                                            0.0f;
+	}
+
+	// the combat state a creature's lights start at: the last one the game announced for it, else in a fight or not
+	[[nodiscard]] constexpr int StartState(std::optional<int> a_announced, bool a_inCombat) noexcept
+	{
+		return a_announced ? *a_announced : (a_inCombat ? 1 : 0);
+	}
+
+	// the fade an ease starts from: what the light shows now (flicker and a surge above full included), so a change part way through an
+	// ease never steps; a light whose fade cannot be read starts from its full fade at the share it knew
+	[[nodiscard]] inline float StartFade(float a_shown, float a_full, float a_known) noexcept
+	{
+		return std::isfinite(a_shown) && a_shown >= 0.0f ? a_shown : a_full * a_known;
+	}
+
+	// a light's fade from a_start (the fade it shows) to a_to (a share of its full fade a_fade), eased over the rise or the fall: the first key
+	// is a_start itself and the flicker fades in with the ease; with a flicker its keys go on at the new share for kCastSeconds. Played
+	// once: the last key holds, so the ramp never comes round again
+	[[nodiscard]] inline std::vector<Key> NoticeKeys(float a_fade, Pulse::Kind a_kind, std::uint32_t a_seed, float a_start, float a_to)
+	{
+		const float      ramp = a_fade * a_to >= a_start ? kNoticeUpSeconds : kNoticeDownSeconds;
+		const float      seconds = a_kind == Pulse::Kind::kNone || a_to <= 0.0f ? ramp : ramp + kCastSeconds;
+		const auto       count = static_cast<std::size_t>(seconds * kKeysPerSecond) + 1;
+		std::vector<Key> keys;
+		keys.reserve(count);
+		for (std::size_t i = 0; i < count; ++i) {
+			const float t = static_cast<float>(i) / kKeysPerSecond;
+			const float u = std::clamp(t / ramp, 0.0f, 1.0f);
+			const float eased = u * u * (3.0f - 2.0f * u);
+			const float target = a_fade * a_to * Pulse::Factor(a_kind, static_cast<double>(t), a_seed);
+			keys.push_back({ t, a_start + (target - a_start) * eased });
 		}
 		return keys;
 	}

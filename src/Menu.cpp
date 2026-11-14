@@ -176,6 +176,7 @@ namespace Plugin
 			Field(T("Flicker and pulse"), &Anima::Settings::flicker, T("Flame creatures flicker, storm creatures crackle, and wisps and spirits breathe."));
 			Field(T("Fade on death"), &Anima::Settings::deathFade, T("A dying creature's light fades over a few seconds, leaving an ember on flame creatures."));
 			Field(T("Glow when casting"), &Anima::Settings::surge, T("A creature's light brightens briefly while it casts or breathes."));
+			Field(T("Dark until noticed"), &Anima::Settings::noticed, T("A creature stays dark until it notices you, then its light fades up (off by default)."));
 
 			// one dropdown, a sub-dropdown per creatures file, a checkbox beside each creature
 			if (const auto& list = CreatureList(); !list.empty()) {

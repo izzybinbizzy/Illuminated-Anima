@@ -101,8 +101,10 @@ namespace Plugin
 				SKSE::log::info("stream rows: {} has its own switch, which a stream row cannot follow - left out", row.name);
 				continue;
 			}
-			const bool               natural = Anima::Natural(row.element);
-			const StreamRows::Recipe recipe{ .color = { row.rgb[0] / 255.0f, row.rgb[1] / 255.0f, row.rgb[2] / 255.0f },
+			const bool natural = Anima::Natural(row.element);
+			// read after ReadLighting: the lighting does not change within a game
+			const auto&              rgb = InverseSquare() && row.rgbIsl ? *row.rgbIsl : row.rgb;
+			const StreamRows::Recipe recipe{ .color = { rgb[0] / 255.0f, rgb[1] / 255.0f, rgb[2] / 255.0f },
 				.fade = row.strength,
 				.reach = row.reach,
 				.beam = row.stream == Anima::Stream::kBolt,
