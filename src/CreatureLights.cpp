@@ -728,10 +728,10 @@ namespace Plugin
 			}
 			const float known = a_snap ? a_share : a_lit.notice;
 			for (auto& one : a_lit.lights) {
-				// a change part way through an ease starts where the light is, never at the share it was heading for
-				const float from = a_snap || !one.light ? known : Anima::ShownShare(one.light->GetLightRuntimeData().fade, one.fade, known);
+				// a change part way through an ease starts at the fade the light shows, never at the share it was heading for
+				const float start = a_snap || !one.light ? one.fade * known : Anima::StartFade(one.light->GetLightRuntimeData().fade, one.fade, known);
 				const auto  shape = ShapeOf(Rows()[one.row], a_s);
-				const auto  keys = Anima::NoticeKeys(one.fade, shape, a_lit.seed, from, a_share);
+				const auto  keys = Anima::NoticeKeys(one.fade, shape, a_lit.seed, start, a_share);
 				if (const auto played = MakeKeys(keys)) {
 					Play(one, played, keys.back().time, false);
 				} else if (one.light) {
